@@ -94,3 +94,36 @@ func (h *CarPoolRideHandler) GetCarpoolRide(w http.ResponseWriter, r *http.Reque
 
 	json.NewEncoder(w).Encode(ride)
 }
+
+func (h *CarPoolRideHandler) DeleteCarpoolRide(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Received request: Method: %s, URL: %s", r.Method, r.URL) 
+
+	vars := mux.Vars(r)
+	carpoolIDStr := vars["carpoolID"] 
+	rideIDStr := vars["rideID"] 
+
+	carpoolID, err := uuid.Parse(carpoolIDStr)
+	if err != nil {
+			http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+			return
+	}
+
+	rideID, err := uuid.Parse(rideIDStr)
+	if err != nil {
+			http.Error(w, "Invalid ride ID", http.StatusBadRequest)
+			return
+	}
+
+	err = h.carpoolRideRepo.DeleteCarpoolRide(r.Context(), carpoolID, rideID) 
+	if err != nil {
+			if err.Error() == "carpool ride not found" {
+					http.Error(w, "Carpool ride not found", http.StatusNotFound)
+					return
+			}
+			log.Printf("Failed to delete carpool ride: %v", err)
+			http.Error(w, "Failed to delete carpool ride", http.StatusInternalServerError)
+			return
+	}
+
+	w.WriteHeader(http.StatusNoContent) 
+}

@@ -76,3 +76,25 @@ func (r *InviteRepository) GetInvite(ctx context.Context, inviteID uuid.UUID) (*
     return invite, nil
 }
 
+func (r *InviteRepository) DeleteInvite(ctx context.Context, inviteID uuid.UUID) error {
+	query := `
+			DELETE FROM invites
+			WHERE id = $1
+	`
+
+	result, err := r.db.ExecContext(ctx, query, inviteID)
+	if err != nil {
+			return fmt.Errorf("failed to delete invite: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+			return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+			return fmt.Errorf("invite not found")
+	}
+
+	return nil
+}

@@ -23,6 +23,7 @@ func NewInviteHandler(repo *repository.InviteRepository) *InviteHandler {
 }
 
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Received CreateInvite request: %s", r.URL)
     var req models.CreateInviteRequest
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
             log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request: %v\"}", err)
@@ -30,8 +31,9 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
             return
     }
 
+	log.Printf("Received CreateInvite request with data: %+v", req)
     // Placeholder: Replace with actual user ID retrieval logic
-    userID, _ := uuid.Parse("user-123") 
+    userID, _ := uuid.Parse("c9407e8b-8cfc-4e63-b01a-b32c44b69261") 
 
     // Create Invite object
     invite := &models.Invite{
@@ -76,4 +78,29 @@ func (h *InviteHandler) GetInvite(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(invite)
 }
+
+func (h *InviteHandler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	inviteIDStr := vars["id"]
+
+	inviteID, err := uuid.Parse(inviteIDStr)
+	if err != nil {
+			http.Error(w, "Invalid invite ID", http.StatusBadRequest)
+			return
+	}
+
+	err = h.inviteRepo.DeleteInvite(r.Context(), inviteID)
+	if err != nil {
+			if err.Error() == "invite not found" {
+					http.Error(w, "Invite not found", http.StatusNotFound)
+					return
+			}
+			http.Error(w, fmt.Sprintf("Failed to delete invite: %v", err), http.StatusInternalServerError)
+			return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+
 

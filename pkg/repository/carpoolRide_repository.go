@@ -80,3 +80,26 @@ func (r *CarPoolRideRepository) GetCarpoolRide(ctx context.Context, rideID uuid.
 
 	return ride, nil
 }
+
+func (r *CarPoolRideRepository) DeleteCarpoolRide(ctx context.Context, carpoolID uuid.UUID, rideID uuid.UUID) error {
+	query := `
+                DELETE FROM carpool_rides
+                WHERE id = $1 AND carpool_id = $2
+        `
+
+	result, err := r.db.ExecContext(ctx, query, rideID, carpoolID)
+	if err != nil {
+			return fmt.Errorf("failed to delete carpool ride: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+			return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+			return fmt.Errorf("carpool ride not found")
+	}
+
+	return nil
+}

@@ -170,9 +170,11 @@ func setupRouter(userHandler *handlers.UserHandler, carpoolHandler *handlers.Car
 
 	protected.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
 	protected.HandleFunc("/carpools/{id}/rides/{rideID}", carpoolRideHandler.GetCarpoolRide).Methods("GET")
+	protected.HandleFunc("/carpools/{carpoolID}/rides/{rideID}", carpoolRideHandler.DeleteCarpoolRide).Methods("DELETE")
 
 	protected.HandleFunc("/invites", inviteHandler.CreateInvite).Methods("POST")
 	protected.HandleFunc("/invites/{id}", inviteHandler.GetInvite).Methods("GET")
+	protected.HandleFunc("/invites/{id}", inviteHandler.DeleteInvite).Methods("DELETE")
 	return r
 }
 
@@ -197,7 +199,7 @@ func main() {
 
 	// CORS middleware configuration
 	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedOrigins:   []string{"http://localhost:8080"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Accept", "Authorization"},
 		AllowCredentials: true,
