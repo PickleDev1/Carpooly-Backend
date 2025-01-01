@@ -4,8 +4,11 @@ import (
 	"car-backend/pkg/models"
 	"car-backend/pkg/repository"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/google/uuid"
 )
@@ -17,7 +20,7 @@ type UserHandler struct {
 
 func NewUserHandler(userRepo *repository.UserRepository) *UserHandler {
 	return &UserHandler{
-		userRepo:    userRepo,
+		userRepo: userRepo,
 	}
 }
 
@@ -134,4 +137,41 @@ func (h *UserHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(user)
+}
+
+func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+	// Print the entire request
+	dump, err := httputil.DumpRequest(r, true)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to dump request: %v\"}", err)
+	} else {
+		fmt.Println("**Full Request:**", string(dump))
+	}
+
+	ctx := r.Context()
+
+	var user models.CreateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Create a new user model with additional fields (optional)
+	newUser := &models.User{
+		Email:       user.Email,
+		Name:        user.Name,
+		DisplayName: user.DisplayName,
+		City:        user.City,
+		State:       user.State,
+	}
+
+	if err := h.userRepo.CreateUser(ctx, newUser); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create user: %v\"}", err)
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(newUser)
 }

@@ -55,6 +55,7 @@ func (r *InviteRepository) GetInvite(ctx context.Context, inviteID uuid.UUID) (*
             FROM invites
             WHERE id = $1
     `
+	//Just a little note
 
     err := r.db.QueryRowContext(ctx, query, inviteID).Scan(
             &invite.ID,
