@@ -24,6 +24,7 @@ type CreateUserRequest struct {
 	DisplayName string `json:"display_name"`
 	City        string `json:"city"`
 	State       string `json:"state"`
+	ClerkID     string `json:"clerk_id"`
 }
 
 type UpdateUserProfile struct {

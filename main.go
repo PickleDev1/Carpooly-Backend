@@ -177,6 +177,7 @@ func setupRouter(userHandler *handlers.UserHandler, carpoolHandler *handlers.Car
 
 	protected.HandleFunc("/invites", inviteHandler.CreateInvite).Methods("POST")
 	protected.HandleFunc("/invites/{id}", inviteHandler.GetInvite).Methods("GET")
+	protected.HandleFunc("/userinvites/{userID}", inviteHandler.GetUserInvites).Methods("GET")
 	protected.HandleFunc("/invites/{id}", inviteHandler.DeleteInvite).Methods("DELETE")
 	return r
 }
@@ -202,7 +203,7 @@ func main() {
 
 	// CORS middleware configuration
 	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:8080"},
+		AllowedOrigins:   []string{"http://localhost:8080", "https://carpooly-web.vercel.app"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Accept", "Authorization"},
 		AllowCredentials: true,

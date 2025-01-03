@@ -163,6 +163,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		DisplayName: user.DisplayName,
 		City:        user.City,
 		State:       user.State,
+		ClerkID:     user.ClerkID,
 	}
 
 	if err := h.userRepo.CreateUser(ctx, newUser); err != nil {
