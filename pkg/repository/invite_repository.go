@@ -139,3 +139,28 @@ func (r *InviteRepository) GetUserInvites(ctx context.Context, userID uuid.UUID)
 
 	return invites, nil
 }
+
+func (r *InviteRepository) UpdateInviteStatus(ctx context.Context, inviteID uuid.UUID, status int) error {
+	query := `
+                UPDATE invites
+                SET status = $2
+                WHERE id = $1
+        `
+	//status=1 is accept
+	//status=2 is reject
+	result, err := r.db.ExecContext(ctx, query, inviteID, status)
+	if err != nil {
+		return fmt.Errorf("failed to update invite status: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("invite not found")
+	}
+
+	return nil
+}

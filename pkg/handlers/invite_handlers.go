@@ -122,3 +122,34 @@ func (h *InviteHandler) GetUserInvites(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(invites)
 }
+
+func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	vars := mux.Vars(r)
+	inviteIDStr := vars["id"]
+
+	inviteID, err := uuid.Parse(inviteIDStr)
+	if err != nil {
+		http.Error(w, "Invalid invite ID", http.StatusBadRequest)
+		return
+	}
+
+	var req models.UpdateInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	err = h.inviteRepo.UpdateInviteStatus(r.Context(), inviteID, req.Status)
+	if err != nil {
+		if err.Error() == "invite not found" {
+			http.Error(w, "Invite not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to update invite status: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}

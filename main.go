@@ -176,6 +176,7 @@ func setupRouter(userHandler *handlers.UserHandler, carpoolHandler *handlers.Car
 	protected.HandleFunc("/carpools/{carpoolID}/rides/{rideID}", carpoolRideHandler.DeleteCarpoolRide).Methods("DELETE")
 
 	protected.HandleFunc("/invites", inviteHandler.CreateInvite).Methods("POST")
+	protected.HandleFunc("/invites/{id}/updateStatus", inviteHandler.UpdateInviteStatus).Methods("PUT")
 	protected.HandleFunc("/invites/{id}", inviteHandler.GetInvite).Methods("GET")
 	protected.HandleFunc("/userinvites/{userID}", inviteHandler.GetUserInvites).Methods("GET")
 	protected.HandleFunc("/invites/{id}", inviteHandler.DeleteInvite).Methods("DELETE")
