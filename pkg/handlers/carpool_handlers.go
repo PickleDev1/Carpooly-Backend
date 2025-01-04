@@ -50,7 +50,7 @@ func (h *CarPoolHandler) CreateCarPool(w http.ResponseWriter, r *http.Request) {
 
 	// Create carpool object
 	carpool := &models.Carpool{
-		CreatorID:          userID, // Use actual userID from context(req.CreatorID)
+		CreatorID:          userID, // Use actual userID from context(commented out in code above)
 		CarpoolName:        req.CarpoolName,
 		Status:             false, // Default status
 		RecurringOption:    req.RecurringOption,

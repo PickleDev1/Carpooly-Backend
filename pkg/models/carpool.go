@@ -57,7 +57,6 @@ type Stop struct {
 
 // CreateCarPoolRequest represents the request structure for creating a new carpool
 type CreateCarPoolRequest struct {
-	//CreatorID          uuid.UUID `json:"creator_id"`
 	CarpoolName        string `json:"carpool_name"`
 	RecurringOption    string `json:"recurring_option"`
 	AvailableSeats     int    `json:"available_seats"`
