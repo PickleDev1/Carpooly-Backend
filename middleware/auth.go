@@ -32,3 +32,9 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// Add this helper function to get userID from context
+func GetUserIDFromContext(ctx context.Context) (string, bool) {
+	userID, ok := ctx.Value(userIDKey).(string)
+	return userID, ok
+}

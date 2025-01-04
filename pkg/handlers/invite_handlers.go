@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 
+	"car-backend/middleware"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
@@ -25,6 +27,19 @@ func NewInviteHandler(repo *repository.InviteRepository) *InviteHandler {
 
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received CreateInvite request: %s", r.URL)
+	// Get userID from context
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse the userID to UUID
+	fromUserID, err := uuid.Parse(userID)
+	if err != nil {
+		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
+		return
+	}
 	var req models.CreateInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request: %v\"}", err)
@@ -34,15 +49,15 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received CreateInvite request with data: %+v", req)
 	// Placeholder: Replace with actual user ID retrieval logic
-	userID, _ := uuid.Parse("6893bb9a-44d3-458e-b1a0-cb7b74c5cce1")
+	//userID, _ := uuid.Parse("6893bb9a-44d3-458e-b1a0-cb7b74c5cce1")
 
 	// Create Invite object
 	invite := &models.Invite{
-		FromUser:  userID,
+		FromUser:  fromUserID,
 		ToUser:    req.ToUser,
 		CarpoolID: req.CarpoolID,
 		Message:   req.Message,
-		Status:    0, // Initial status: pending
+		Status:    models.InviteStatusPending,
 	}
 
 	if err := h.inviteRepo.CreateInvite(r.Context(), invite); err != nil {
@@ -51,7 +66,8 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(invite)
 }
 
 func (h *InviteHandler) GetInvite(w http.ResponseWriter, r *http.Request) {

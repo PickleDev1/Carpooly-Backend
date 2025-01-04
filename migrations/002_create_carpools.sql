@@ -68,6 +68,13 @@ CREATE TABLE invites (
     FOREIGN KEY (carpool_id) REFERENCES carpools(id)
 );
 
+ALTER TABLE
+  "public"."carpools"
+ALTER COLUMN
+  "creator_id"
+TYPE uuid
+USING "creator_id"::uuid;
+
 
 
 

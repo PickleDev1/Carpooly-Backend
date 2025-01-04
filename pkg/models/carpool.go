@@ -9,7 +9,7 @@ import (
 // Carpool represents a carpool group
 type Carpool struct {
 	ID                 uuid.UUID `json:"id" db:"id"`
-	CreatorID          string    `json:"creator_id" db:"creator_id"`
+	CreatorID          uuid.UUID `json:"creator_id" db:"creator_id"`
 	CarpoolName        string    `json:"carpool_name" db:"carpool_name"`
 	Status             bool      `json:"status" db:"status"`
 	RecurringOption    string    `json:"recurring_option" db:"recurring_option"`
@@ -57,6 +57,7 @@ type Stop struct {
 
 // CreateCarPoolRequest represents the request structure for creating a new carpool
 type CreateCarPoolRequest struct {
+	//CreatorID          uuid.UUID `json:"creator_id"`
 	CarpoolName        string `json:"carpool_name"`
 	RecurringOption    string `json:"recurring_option"`
 	AvailableSeats     int    `json:"available_seats"`
@@ -103,6 +104,3 @@ type CreateCarPoolMemberRequest struct {
 	CarpoolID uuid.UUID `json:"carpool_id"`
 	UserID    uuid.UUID `json:"user_id"`
 }
-
-
-
