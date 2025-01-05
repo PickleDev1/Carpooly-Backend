@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strings"
 
 	"github.com/golang-jwt/jwt"
 )
@@ -13,28 +14,44 @@ type UserClaims struct {
 	EmailAddress string `json:"email"`
 }
 
-type contextKey int
+type authContextKey int
 
-const userIDKey contextKey = iota
+const (
+	userIDKey authContextKey = iota
+	emailKey
+)
 
 func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			userID := r.Header.Get("X-User-ID")
-			if userID == "" {
+			authHeader := r.Header.Get("Authorization")
+			if !strings.HasPrefix(authHeader, "Bearer ") {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			// Add user info to context if needed
-			ctx := context.WithValue(r.Context(), userIDKey, userID)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			// Extract claims from JWT token
+			if claims, ok := r.Context().Value("clerk.claims").(*UserClaims); ok {
+				userID := claims.Subject // Get user ID from JWT claims
+				ctx := context.WithValue(r.Context(), userIDKey, userID)
+				ctx = context.WithValue(ctx, emailKey, claims.EmailAddress)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			http.Error(w, "Unauthorized - Invalid claims", http.StatusUnauthorized)
 		})
 	}
 }
 
-// Add this helper function to get userID from context
+// Get userID from context
 func GetUserIDFromContext(ctx context.Context) (string, bool) {
 	userID, ok := ctx.Value(userIDKey).(string)
 	return userID, ok
+}
+
+// Add a helper function to get email
+func GetEmailFromContext(ctx context.Context) (string, bool) {
+	email, ok := ctx.Value(emailKey).(string)
+	return email, ok
 }

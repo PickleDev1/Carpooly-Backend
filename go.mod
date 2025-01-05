@@ -5,9 +5,11 @@ go 1.22
 require (
 	github.com/GoogleCloudPlatform/cloudsql-proxy v1.37.3
 	github.com/clerk/clerk-sdk-go/v2 v2.2.0
+	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
+	github.com/rs/cors v1.11.1
 )
 
 require (
@@ -19,7 +21,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/s2a-go v0.1.8 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/googleapis/gax-go/v2 v2.14.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
@@ -42,7 +44,5 @@ require (
 
 require (
 	github.com/go-jose/go-jose/v3 v3.0.3 // indirect
-	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
-	github.com/rs/cors v1.11.1 // indirect
 	golang.org/x/crypto v0.30.0 // indirect
 )

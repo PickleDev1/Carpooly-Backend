@@ -207,7 +207,7 @@ func main() {
 
 	// CORS middleware configuration
 	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:8080", "https://carpooly-web.vercel.app"},
+		AllowedOrigins:   []string{"http://localhost:8080", "https://carpooly-web.vercel.app", "http://localhost:3000"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Accept", "Authorization"},
 		AllowCredentials: true,
