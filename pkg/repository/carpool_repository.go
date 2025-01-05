@@ -18,7 +18,6 @@ func NewCarPoolRepository(db *sql.DB) *CarPoolRepository {
 	return &CarPoolRepository{db: db}
 }
 
-// Implement the CreateCarPool method
 func (r *CarPoolRepository) CreateCarPool(ctx context.Context, carpool *models.Carpool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -42,6 +41,17 @@ func (r *CarPoolRepository) CreateCarPool(ctx context.Context, carpool *models.C
 
 	if err != nil {
 		return fmt.Errorf("failed to insert carpool: %v", err)
+	}
+
+	// Insert carpool member (creator)
+	memberQuery := `
+        INSERT INTO carpool_members (carpool_id, user_id)
+        VALUES ($1, $2)
+    `
+
+	_, err = tx.ExecContext(ctx, memberQuery, carpool.ID, carpool.CreatorID)
+	if err != nil {
+		return fmt.Errorf("failed to insert carpool member: %v", err)
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -162,6 +172,51 @@ func (r *CarPoolRepository) GetCarpoolsByCreatorID(ctx context.Context, creatorI
 			return nil, fmt.Errorf("failed to scan carpool: %v", err)
 		}
 		carpools = append(carpools, carpool)
+	}
+
+	return carpools, nil
+}
+
+func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUID) ([]models.Carpool, error) {
+	var carpools []models.Carpool
+
+	// Join carpools and carpool_members tables to get carpools where the user is a member
+	query := `
+           SELECT DISTINCT c.* 
+                FROM carpools c
+                JOIN carpool_members cm ON c.id = cm.carpool_id
+                WHERE cm.user_id = $1
+
+    `
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user carpools: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var carpool models.Carpool
+		err := rows.Scan(
+			&carpool.ID,
+			&carpool.CreatorID,
+			&carpool.CarpoolName,
+			&carpool.Status,
+			&carpool.RecurringOption,
+			&carpool.AvailableSeats,
+			&carpool.DestinationAddress,
+			&carpool.Seats,
+			&carpool.CreatedAt,
+			&carpool.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan carpool: %w", err)
+		}
+		carpools = append(carpools, carpool)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate over carpool rows: %w", err)
 	}
 
 	return carpools, nil

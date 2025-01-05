@@ -125,7 +125,7 @@ func (h *CarPoolHandler) SearchCarPools(w http.ResponseWriter, r *http.Request) 
 	// TODO: Implement
 }
 
-func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request) {
+func (h *CarPoolHandler) GetCreatorCarpools(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	vars := mux.Vars(r)
@@ -139,6 +139,27 @@ func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user carpools: %v\"}", err)
 		http.Error(w, "Failed to get carpools", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(carpools)
+}
+
+func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	vars := mux.Vars(r)
+	userIDStr := vars["userID"]
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	carpools, err := h.carpoolRepo.GetUserCarpools(r.Context(), userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get user carpools: %v", err), http.StatusInternalServerError)
 		return
 	}
 
