@@ -5,13 +5,16 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
-	"github.com/golang-jwt/jwt"
+	"github.com/MicahParks/keyfunc/v2"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type UserClaims struct {
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 	EmailAddress string `json:"email"`
 }
 
@@ -23,32 +26,78 @@ const (
 )
 
 func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
+	// Get JWKS URL from environment variable
+	jwksURL := os.Getenv("CLERK_JWKS_URL")
+	if jwksURL == "" {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"CLERK_JWKS_URL environment variable not set\"}")
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "Server configuration error", http.StatusInternalServerError)
+			})
+		}
+	}
+
+	// Create the JWKS from the URL
+	jwks, err := keyfunc.Get(jwksURL, keyfunc.Options{
+		RefreshInterval: time.Hour,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create JWKS from URL: %v", err)
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Log request details
-			log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting AuthMiddleware\",\"path\":\"%s\",\"method\":\"%s\"}",
-				r.URL.Path, r.Method)
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting AuthMiddleware\",\"path\":\"%s\"}", r.URL.Path)
 
-			// Log headers
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Request headers\",\"headers\":%q}", r.Header)
+			// Log the entire request for debugging
+			for name, values := range r.Header {
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Header\",\"name\":\"%s\",\"value\":\"%s\"}",
+					name, values[0])
+			}
 
 			// Check for Authorization header
 			authHeader := r.Header.Get("Authorization")
 			if !strings.HasPrefix(authHeader, "Bearer ") {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid auth header format\"}")
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			// Extract claims from JWT token
-			if claims, ok := r.Context().Value("clerk.claims").(*UserClaims); ok {
-				userID := claims.Subject // Get user ID from JWT claims
-				ctx := context.WithValue(r.Context(), userIDKey, userID)
-				ctx = context.WithValue(ctx, emailKey, claims.EmailAddress)
-				next.ServeHTTP(w, r.WithContext(ctx))
+			// Extract token
+			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+			// Parse and validate the token
+			token, err := jwt.Parse(tokenString, jwks.Keyfunc)
+			if err != nil || !token.Valid {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid token\",\"error\":\"%v\"}", err)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			http.Error(w, "Unauthorized - Invalid claims", http.StatusUnauthorized)
+			// Extract claims
+			claims, ok := token.Claims.(jwt.MapClaims)
+			if !ok {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid claims format\"}")
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Get user info from claims
+			userID, ok := claims["sub"].(string)
+			if !ok {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"No user ID in claims\"}")
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Add user info to context
+			ctx := r.Context()
+			ctx = context.WithValue(ctx, userIDKey, userID)
+			if email, ok := claims["email"].(string); ok {
+				ctx = context.WithValue(ctx, emailKey, email)
+			}
+
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

@@ -170,11 +170,11 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/profile", userHandler.UpdateProfile).Methods("PUT")
 
 	// Make these carpool endpoints public for testing
-	r.HandleFunc("/api/carpools", carpoolHandler.CreateCarPool).Methods("POST")
-	r.HandleFunc("/api/carpools/{id}", carpoolHandler.GetCarPool).Methods("GET")
+	//r.HandleFunc("/api/carpools", carpoolHandler.CreateCarPool).Methods("POST")
+	//r.HandleFunc("/api/carpools/{id}", carpoolHandler.GetCarPool).Methods("GET")
 
-	//protected.HandleFunc("/carpools", carpoolHandler.CreateCarPool).Methods("POST")
-	//protected.HandleFunc("/carpools/{id}", carpoolHandler.GetCarPool).Methods("GET")
+	protected.HandleFunc("/carpools", carpoolHandler.CreateCarPool).Methods("POST")
+	protected.HandleFunc("/carpools/{id}", carpoolHandler.GetCarPool).Methods("GET")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.UpdateCarPool).Methods("PUT")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.DeleteCarPool).Methods("DELETE")
 	protected.HandleFunc("/carpools/search", carpoolHandler.SearchCarPools).Methods("POST")
