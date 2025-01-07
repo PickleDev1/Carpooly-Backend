@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 
+	"car-backend/middleware"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
@@ -33,20 +35,21 @@ func (h *CarPoolHandler) CreateCarPool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get userID from context
-	//userID, ok := middleware.GetUserIDFromContext(r.Context())
-	//if !ok {
-	// For local testing, use this hardcoded UUID:
-	userIDStr := "b0337c8a-1eed-4a11-90c8-130016c47d0a"
+	userIDStr, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
+		return
+	}
+
 	userID, err := uuid.Parse(userIDStr)
+	// For local testing, use this hardcoded UUID:
+	//userIDStr := "b0337c8a-1eed-4a11-90c8-130016c47d0a"
+	//userID, err := uuid.Parse(userIDStr)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to parse UUID: %v\"}", err)
 		http.Error(w, "Invalid user ID format", http.StatusInternalServerError)
 		return
 	}
-
-	//	http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
-	//	return
-	//}
 
 	// Create carpool object
 	carpool := &models.Carpool{
@@ -148,20 +151,31 @@ func (h *CarPoolHandler) GetCreatorCarpools(w http.ResponseWriter, r *http.Reque
 func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	vars := mux.Vars(r)
-	userIDStr := vars["userID"]
-
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+	// Get userID from context
+	userIDStr, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
 		return
 	}
+
+	// Parse the userID string to UUID
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
+		return
+	}
+
+	// Print the request
+	log.Printf("Received GetUserCarpools request for userID: %s", userID)
 
 	carpools, err := h.carpoolRepo.GetUserCarpools(r.Context(), userID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get user carpools: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// Print the response
+	log.Printf("Retrieved carpools for userID: %s: %+v", userID, carpools)
 
 	json.NewEncoder(w).Encode(carpools)
 }

@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"database/sql"
+	"log"
 	"net/http"
 	"strings"
 
@@ -24,6 +25,14 @@ const (
 func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Log request details
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting AuthMiddleware\",\"path\":\"%s\",\"method\":\"%s\"}",
+				r.URL.Path, r.Method)
+
+			// Log headers
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Request headers\",\"headers\":%q}", r.Header)
+
+			// Check for Authorization header
 			authHeader := r.Header.Get("Authorization")
 			if !strings.HasPrefix(authHeader, "Bearer ") {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)

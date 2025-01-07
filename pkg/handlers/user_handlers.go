@@ -104,9 +104,11 @@ func (h *UserHandler) AuthenticateUser(w http.ResponseWriter, r *http.Request) {
 func (h *UserHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	claims, ok := clerk.SessionClaimsFromContext(ctx)
+	log.Printf("Received CreateProfile request with headers: %v", r.Header)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		log.Printf("No clerk claims found in context")
+		//http.Error(w, "Unauthorized - No claims found", http.StatusUnauthorized)
+		//return
 	}
 
 	var profile models.UpdateUserProfile
@@ -129,7 +131,7 @@ func (h *UserHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 		State:       *profile.State,
 	}
 
-	if err := h.userRepo.CreateUser(ctx, user); err != nil {
+	if err := h.userRepo.CreateUser(r.Context(), user); err != nil {
 		http.Error(w, "Failed to create profile", http.StatusInternalServerError)
 		return
 	}

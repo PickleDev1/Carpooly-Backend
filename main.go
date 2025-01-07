@@ -13,6 +13,8 @@ import (
 	"os/signal"
 	"time"
 
+	"car-backend/middleware"
+
 	_ "github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/dialers/postgres"
 	"github.com/clerk/clerk-sdk-go/v2"
 	clerkhttp "github.com/clerk/clerk-sdk-go/v2/http"
@@ -130,7 +132,7 @@ func setupClerk() {
 	clerk.SetKey(clerkSecretKey)
 }
 
-func setupRouter(userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler) *mux.Router {
+func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler) *mux.Router {
 	r := mux.NewRouter()
 
 	// Health check endpoint (public)
@@ -148,12 +150,18 @@ func setupRouter(userHandler *handlers.UserHandler, carpoolHandler *handlers.Car
 		})
 	}).Methods("GET")
 
-	// Public routes
-	r.HandleFunc("/webhook/clerk", userHandler.HandleWebhook).Methods("POST")
+	// Create separate subrouter for webhook endpoint
+	webhookRouter := r.PathPrefix("/api").Subrouter()
+	webhookRouter.Use(middleware.WebhookAuthMiddleware)
+	webhookRouter.HandleFunc("/profile", userHandler.CreateProfile).Methods("POST")
 
-	// Protected routes with Clerk authentication
+	// Add Clerk webhook endpoint to the same webhookRouter
+	webhookRouter.HandleFunc("/webhooks/clerk", webhookHandler.HandleClerkWebhook).Methods("POST")
+
+	// Protected routes with JWT auth (everything else)
 	protected := r.PathPrefix("/api").Subrouter()
 	protected.Use(clerkhttp.WithHeaderAuthorization())
+	protected.Use(middleware.AuthMiddleware(db))
 
 	protected.HandleFunc("/users", userHandler.CreateUser).Methods("POST")
 
@@ -183,6 +191,11 @@ func setupRouter(userHandler *handlers.UserHandler, carpoolHandler *handlers.Car
 	protected.HandleFunc("/invites/{id}", inviteHandler.GetInvite).Methods("GET")
 	protected.HandleFunc("/userinvites/{userID}", inviteHandler.GetUserInvites).Methods("GET")
 	protected.HandleFunc("/invites/{id}", inviteHandler.DeleteInvite).Methods("DELETE")
+
+	// Webhook endpoints
+	webhookRouter = r.PathPrefix("/api/webhooks").Subrouter()
+	webhookRouter.Use(middleware.WebhookAuthMiddleware)
+	webhookRouter.HandleFunc("/clerk", webhookHandler.HandleClerkWebhook).Methods("POST")
 
 	return r
 }
@@ -232,8 +245,9 @@ func main() {
 	carpoolHandler := handlers.NewCarPoolHandler(carpoolRepo)
 	inviteHandler := handlers.NewInviteHandler(inviteRepo)
 	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo)
+	webhookHandler := handlers.NewWebhookHandler(userRepo)
 
-	router := setupRouter(userHandler, carpoolHandler, inviteHandler, carpoolRideHandler)
+	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
