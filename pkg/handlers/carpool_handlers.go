@@ -18,11 +18,13 @@ import (
 
 type CarPoolHandler struct {
 	carpoolRepo *repository.CarPoolRepository
+	userRepo    *repository.UserRepository
 }
 
-func NewCarPoolHandler(repo *repository.CarPoolRepository) *CarPoolHandler {
+func NewCarPoolHandler(carpoolRepo *repository.CarPoolRepository, userRepo *repository.UserRepository) *CarPoolHandler {
 	return &CarPoolHandler{
-		carpoolRepo: repo,
+		carpoolRepo: carpoolRepo,
+		userRepo:    userRepo,
 	}
 }
 
@@ -35,13 +37,13 @@ func (h *CarPoolHandler) CreateCarPool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get userID from context
-	userIDStr, ok := middleware.GetUserIDFromContext(r.Context())
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
 		return
 	}
-
-	userID, err := uuid.Parse(userIDStr)
+	log.Printf("User ID String: %s", clerkID)
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	// For local testing, use this hardcoded UUID:
 	//userIDStr := "b0337c8a-1eed-4a11-90c8-130016c47d0a"
 	//userID, err := uuid.Parse(userIDStr)
@@ -151,31 +153,32 @@ func (h *CarPoolHandler) GetCreatorCarpools(w http.ResponseWriter, r *http.Reque
 func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Get userID from context
-	userIDStr, ok := middleware.GetUserIDFromContext(r.Context())
+	// Get Clerk ID from context (this stays as string)
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
+		http.Error(w, "Unauthorized - No clerk ID in context", http.StatusUnauthorized)
 		return
 	}
 
-	// Parse the userID string to UUID
-	userID, err := uuid.Parse(userIDStr)
+	// Get the corresponding UUID from users table using userRepo
+	userUUID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	if err != nil {
-		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user UUID\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
 		return
 	}
 
 	// Print the request
-	log.Printf("Received GetUserCarpools request for userID: %s", userID)
+	log.Printf("Received GetUserCarpools request for userID: %s", userUUID)
 
-	carpools, err := h.carpoolRepo.GetUserCarpools(r.Context(), userID)
+	carpools, err := h.carpoolRepo.GetUserCarpools(r.Context(), userUUID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get user carpools: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Print the response
-	log.Printf("Retrieved carpools for userID: %s: %+v", userID, carpools)
+	log.Printf("Retrieved carpools for userID: %s: %+v", userUUID, carpools)
 
 	json.NewEncoder(w).Encode(carpools)
 }

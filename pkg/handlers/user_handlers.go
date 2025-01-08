@@ -14,8 +14,8 @@ import (
 )
 
 type UserHandler struct {
-	userRepo    *repository.UserRepository
-	clerkClient clerk.Client
+	userRepo *repository.UserRepository
+	//clerkClient clerk.Client
 }
 
 func NewUserHandler(userRepo *repository.UserRepository) *UserHandler {

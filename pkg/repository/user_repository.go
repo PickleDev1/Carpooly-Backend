@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 )
@@ -122,14 +123,21 @@ func (r *UserRepository) CreateUserIfNotExists(ctx context.Context, user *models
 
 func (r *UserRepository) GetUserIDByClerkID(ctx context.Context, clerkID string) (uuid.UUID, error) {
 	var userID uuid.UUID
-	query := `SELECT id FROM users WHERE clerk_id = $1`
+
+	// Query to get user ID from users table using clerk_id
+	query := `
+        SELECT id 
+        FROM users 
+        WHERE clerk_id = $1
+    `
 
 	err := r.db.QueryRowContext(ctx, query, clerkID).Scan(&userID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return uuid.Nil, fmt.Errorf("user not found")
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"No user found for clerk_id\",\"clerk_id\":\"%s\"}", clerkID)
+			return uuid.Nil, fmt.Errorf("no user found for clerk_id: %s", clerkID)
 		}
-		return uuid.Nil, fmt.Errorf("failed to get user ID: %w", err)
+		return uuid.Nil, fmt.Errorf("error querying user: %w", err)
 	}
 
 	return userID, nil

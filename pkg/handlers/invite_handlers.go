@@ -28,7 +28,7 @@ func NewInviteHandler(repo *repository.InviteRepository) *InviteHandler {
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received CreateInvite request: %s", r.URL)
 	// Get userID from context
-	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	userID, ok := middleware.GetClerkIDFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
 		return
