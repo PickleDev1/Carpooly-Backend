@@ -197,6 +197,10 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	webhookRouter.Use(middleware.WebhookAuthMiddleware)
 	webhookRouter.HandleFunc("/clerk", webhookHandler.HandleClerkWebhook).Methods("POST")
 
+	api := r.PathPrefix("/api").Subrouter()
+	users := api.PathPrefix("/users").Subrouter()
+	users.HandleFunc("/me", userHandler.GetCurrentUser).Methods("GET")
+
 	return r
 }
 

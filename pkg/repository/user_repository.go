@@ -142,3 +142,17 @@ func (r *UserRepository) GetUserIDByClerkID(ctx context.Context, clerkID string)
 
 	return userID, nil
 }
+
+func (r *UserRepository) GetUserByClerkID(clerkID string) (*models.User, error) {
+	var user models.User
+	err := r.db.QueryRow(
+		"SELECT id, email, name, clerk_id, created_at, updated_at FROM users WHERE clerk_id = $1",
+		clerkID,
+	).Scan(&user.ID, &user.Email, &user.Name, &user.ClerkID, &user.CreatedAt, &user.UpdatedAt)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}

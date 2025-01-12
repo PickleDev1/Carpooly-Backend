@@ -178,3 +178,11 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newUser)
 }
+
+func (h *UserHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
+	// Get user from context (previously set by auth middleware)
+	user := r.Context().Value("user").(*models.User)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
+}
