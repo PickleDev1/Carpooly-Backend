@@ -197,9 +197,9 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	webhookRouter.Use(middleware.WebhookAuthMiddleware)
 	webhookRouter.HandleFunc("/clerk", webhookHandler.HandleClerkWebhook).Methods("POST")
 
-	api := r.PathPrefix("/api").Subrouter()
-	users := api.PathPrefix("/users").Subrouter()
-	users.HandleFunc("/me", userHandler.GetCurrentUser).Methods("GET")
+	//api := r.PathPrefix("/api").Subrouter()
+	//users := api.PathPrefix("/users").Subrouter()
+	protected.HandleFunc("/users/me", userHandler.GetCurrentUser).Methods("GET", "OPTIONS")
 
 	return r
 }
@@ -225,12 +225,32 @@ func main() {
 
 	// CORS middleware configuration
 	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:8080", "https://carpooly-web.vercel.app", "http://localhost:3000"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type", "Accept", "Authorization"},
-		AllowCredentials: true,
-		Debug:            debugMode,
+		AllowedOrigins: []string{
+			"http://localhost:8080",
+			"https://carpooly-web.vercel.app",
+			"http://localhost:3000",
+			"https://car-backend-latest-884945568547.us-west1.run.app",
+		},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		AllowedHeaders: []string{
+			"Content-Type",
+			"Accept",
+			"Authorization",
+			"X-Requested-With",
+			"Origin",
+			"Access-Control-Request-Method",
+			"Access-Control-Request-Headers",
+		},
+		ExposedHeaders:       []string{"Content-Length"},
+		AllowCredentials:     true,
+		Debug:                true,
+		MaxAge:               300,           // Maximum cache time for preflight requests
+		OptionsPassthrough:   false,         // Change this to false
+		OptionsSuccessStatus: http.StatusOK, // Add this line
 	})
+
+	// Add debug logging
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"CORS configuration applied with origins: %v\"}", corsMiddleware)
 
 	checkEnvironment()
 	setupClerk()

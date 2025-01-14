@@ -47,6 +47,12 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Allow OPTIONS requests to pass through
+			if r.Method == "OPTIONS" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting AuthMiddleware\",\"path\":\"%s\"}", r.URL.Path)
 
 			// Log the entire request for debugging
@@ -55,13 +61,24 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 					name, values[0])
 			}
 
-			// Check for Authorization header
+			// Get the Authorization header
 			authHeader := r.Header.Get("Authorization")
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Auth header received\",\"header\":\"%s\"}", authHeader)
+
+			if authHeader == "" {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"No Authorization header provided\"}")
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Check for Authorization header
 			if !strings.HasPrefix(authHeader, "Bearer ") {
 				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid auth header format\"}")
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
+
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Auth header received\",\"header\":\"%s\"}", authHeader)
 
 			// Extract token
 			tokenString := strings.TrimPrefix(authHeader, "Bearer ")

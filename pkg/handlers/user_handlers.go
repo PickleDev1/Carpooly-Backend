@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 
+	"car-backend/middleware"
+
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/google/uuid"
 )
@@ -180,8 +182,32 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
-	// Get user from context (previously set by auth middleware)
-	user := r.Context().Value("user").(*models.User)
+	// Set CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+	// Handle preflight OPTIONS request
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Get clerk_id from context
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized - No clerk ID in context", http.StatusUnauthorized)
+		return
+	}
+
+	// Get user from database using clerk_id
+	user, err := h.userRepo.GetUserByClerkID(clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(user)
