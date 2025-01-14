@@ -26,7 +26,7 @@ func (r *InviteRepository) CreateInvite(ctx context.Context, invite *models.Invi
 
 	query := `
             INSERT INTO invites (
-                    from_user, to_user, carpool_id, message, status
+                    from_user, to_user_email, carpool_id, message, status
             ) VALUES ($1, $2, $3, $4, $5)
             RETURNING id, created_at, updated_at
     `

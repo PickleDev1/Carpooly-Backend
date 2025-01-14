@@ -10,7 +10,7 @@ import (
 type Invite struct {
 	ID        uuid.UUID `json:"id" db:"id"`
 	FromUser  uuid.UUID `json:"from_user" db:"from_user"`
-	ToUser    uuid.UUID `json:"to_user" db:"to_user"`
+	ToUser    string    `json:"to_user" db:"to_user"`
 	CarpoolID uuid.UUID `json:"carpool_id" db:"carpool_id"`
 	Message   string    `json:"message" db:"message"`
 	Status    int       `json:"status" db:"status"`
@@ -18,12 +18,12 @@ type Invite struct {
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
-
 // CreateInviteRequest represents the request structure for creating a carpool invitation
 type CreateInviteRequest struct {
-	ToUser    uuid.UUID `json:"to_user"`
-	CarpoolID uuid.UUID `json:"carpool_id"`
-	Message   string    `json:"message"`
+	CarpoolID string `json:"carpool_id"`
+	FromUser  string `json:"from_user"`
+	Email     string `json:"email"`
+	Message   string `json:"message"`
 }
 
 // UpdateInviteRequest represents the request structure for updating an invitation status
@@ -37,4 +37,3 @@ const (
 	InviteStatusAccepted = 1
 	InviteStatusRejected = 2
 )
-

@@ -25,6 +25,18 @@ const (
 	emailKey
 )
 
+// Add this new type to capture the response
+type responseWriter struct {
+	http.ResponseWriter
+	body *strings.Builder
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	// Write to both the original ResponseWriter and our buffer
+	rw.body.Write(b)
+	return rw.ResponseWriter.Write(b)
+}
+
 func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 	// Get JWKS URL from environment variable
 	jwksURL := os.Getenv("CLERK_JWKS_URL")
@@ -47,6 +59,16 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Create a response wrapper if this is the /api/invites endpoint
+			var rw *responseWriter
+			if r.URL.Path == "/api/invites" {
+				rw = &responseWriter{
+					ResponseWriter: w,
+					body:           &strings.Builder{},
+				}
+				w = rw
+			}
+
 			// Allow OPTIONS requests to pass through
 			if r.Method == "OPTIONS" {
 				next.ServeHTTP(w, r)
@@ -63,7 +85,7 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 
 			// Get the Authorization header
 			authHeader := r.Header.Get("Authorization")
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Auth header received\",\"header\":\"%s\"}", authHeader)
+			//log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Auth header received\",\"header\":\"%s\"}", authHeader)
 
 			if authHeader == "" {
 				log.Printf("{\"severity\":\"ERROR\",\"message\":\"No Authorization header provided\"}")
@@ -114,7 +136,13 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, emailKey, email)
 			}
 
+			// Call the next handler
 			next.ServeHTTP(w, r.WithContext(ctx))
+
+			// Log the response if this was the /api/invites endpoint
+			if rw != nil {
+				log.Printf("{\"severity\":\"INFO\",\"message\":\"Invite response\",\"response\":%s}", rw.body.String())
+			}
 		})
 	}
 }

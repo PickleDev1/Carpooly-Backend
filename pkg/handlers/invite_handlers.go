@@ -8,8 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-
-	"car-backend/middleware"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -26,48 +25,34 @@ func NewInviteHandler(repo *repository.InviteRepository) *InviteHandler {
 }
 
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received CreateInvite request: %s", r.URL)
-	// Get userID from context
-	userID, ok := middleware.GetClerkIDFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized - No user ID in context", http.StatusUnauthorized)
-		return
-	}
 
-	// Parse the userID to UUID
-	fromUserID, err := uuid.Parse(userID)
-	if err != nil {
-		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
-		return
-	}
-	var req models.CreateInviteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request: %v\"}", err)
+	var invite models.CreateInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&invite); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Received CreateInvite request with data: %+v", req)
-	// Placeholder: Replace with actual user ID retrieval logic
-	//userID, _ := uuid.Parse("6893bb9a-44d3-458e-b1a0-cb7b74c5cce1")
-
-	// Create Invite object
-	invite := &models.Invite{
-		FromUser:  fromUserID,
-		ToUser:    req.ToUser,
-		CarpoolID: req.CarpoolID,
-		Message:   req.Message,
+	// Create new invite using the from_user as the user UUID
+	newInvite := &models.Invite{
+		ID:        uuid.New(),
+		CarpoolID: uuid.MustParse(invite.CarpoolID),
+		FromUser:  uuid.MustParse(invite.FromUser),
+		ToUser:    invite.Email,
+		Message:   invite.Message,
 		Status:    models.InviteStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
-	if err := h.inviteRepo.CreateInvite(r.Context(), invite); err != nil {
+	if err := h.inviteRepo.CreateInvite(r.Context(), newInvite); err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create invite: %v\"}", err)
 		http.Error(w, "Failed to create invite", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(invite)
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(newInvite)
 }
 
 func (h *InviteHandler) GetInvite(w http.ResponseWriter, r *http.Request) {

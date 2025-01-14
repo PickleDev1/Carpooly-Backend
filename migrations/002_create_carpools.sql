@@ -75,6 +75,17 @@ ALTER COLUMN
 TYPE uuid
 USING "creator_id"::uuid;
 
+ALTER TABLE
+  "public"."invites"
+DROP CONSTRAINT
+  "invites_to_user_fkey";
+  
+ALTER TABLE invites 
+RENAME COLUMN to_user TO to_user_email;
+
+ALTER TABLE invites 
+ALTER COLUMN to_user_email TYPE VARCHAR(255);
+
 
 
 
