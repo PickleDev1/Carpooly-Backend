@@ -182,17 +182,6 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
-	// Set CORS headers
-	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
-
-	// Handle preflight OPTIONS request
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 
 	// Get clerk_id from context
 	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
