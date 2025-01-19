@@ -108,19 +108,23 @@ func (h *InviteHandler) GetUserInvites(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	userIDStr := vars["userID"]
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting invites for userID\",\"userID\":\"%s\"}", userIDStr)
 
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID format\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
 	invites, err := h.inviteRepo.GetUserInvites(r.Context(), userID)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user invites\",\"error\":\"%v\"}", err)
 		http.Error(w, fmt.Sprintf("Failed to get user invites: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Retrieved invites\",\"count\":%d}", len(invites))
 	json.NewEncoder(w).Encode(invites)
 }
 

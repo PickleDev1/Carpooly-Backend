@@ -8,14 +8,16 @@ import (
 
 // Invite represents a carpool invitation
 type Invite struct {
-	ID        uuid.UUID `json:"id" db:"id"`
-	FromUser  uuid.UUID `json:"from_user" db:"from_user"`
-	ToUser    string    `json:"to_user" db:"to_user"`
-	CarpoolID uuid.UUID `json:"carpool_id" db:"carpool_id"`
-	Message   string    `json:"message" db:"message"`
-	Status    int       `json:"status" db:"status"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+	ID          uuid.UUID `json:"id" db:"id"`
+	FromUser    uuid.UUID `json:"from_user" db:"from_user"`
+	ToUser      string    `json:"to_user" db:"to_user"`
+	CarpoolID   uuid.UUID `json:"carpool_id" db:"carpool_id"`
+	Message     string    `json:"message" db:"message"`
+	Status      int       `json:"status" db:"status"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+	CarpoolName string    `json:"carpool_name"`
+	SenderEmail string    `json:"sender_email"`
 }
 
 // CreateInviteRequest represents the request structure for creating a carpool invitation

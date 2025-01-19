@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 )
@@ -102,21 +103,43 @@ func (r *InviteRepository) DeleteInvite(ctx context.Context, inviteID uuid.UUID)
 
 func (r *InviteRepository) GetUserInvites(ctx context.Context, userID uuid.UUID) ([]models.Invite, error) {
 	var invites []models.Invite
+	var userEmail string
 
-	query := `
-            SELECT *
-            FROM invites
-            WHERE to_user = $1
-        `
-
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	// First get the user's email
+	emailQuery := `SELECT email FROM users WHERE id = $1`
+	err := r.db.QueryRowContext(ctx, emailQuery, userID).Scan(&userEmail)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user email\",\"error\":\"%v\"}", err)
+		return nil, fmt.Errorf("failed to get user email: %v", err)
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found user email\",\"email\":\"%s\"}", userEmail)
+
+	// Then get the invites using the email
+	query := `
+        SELECT 
+            i.*,
+            c.carpool_name,
+            u.email as sender_email
+        FROM invites i
+        JOIN carpools c ON i.carpool_id = c.id
+        JOIN users u ON i.from_user = u.id
+        WHERE i.to_user_email = $1 AND i.status = 0
+    `
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing invites query\",\"email\":\"%s\"}", userEmail)
+
+	rows, err := r.db.QueryContext(ctx, query, userEmail)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database query failed\",\"error\":\"%v\"}", err)
 		return nil, fmt.Errorf("failed to get user invites: %v", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var invite models.Invite
+		var carpoolName string
+		var senderEmail string
+
 		err := rows.Scan(
 			&invite.ID,
 			&invite.FromUser,
@@ -126,17 +149,27 @@ func (r *InviteRepository) GetUserInvites(ctx context.Context, userID uuid.UUID)
 			&invite.Status,
 			&invite.CreatedAt,
 			&invite.UpdatedAt,
+			&carpoolName,
+			&senderEmail,
 		)
 		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan row\",\"error\":\"%v\"}", err)
 			return nil, fmt.Errorf("failed to scan invite row: %v", err)
 		}
+
+		invite.CarpoolName = carpoolName
+		invite.SenderEmail = senderEmail
+
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Invite details\",\"sender_email\":\"%s\",\"carpool_name\":\"%s\"}",
+			senderEmail, carpoolName)
+
 		invites = append(invites, invite)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate over invite rows: %v", err)
 	}
-
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Retrieved invites\",\"count\":%d}", len(invites))
 	return invites, nil
 }
 
