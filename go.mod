@@ -1,16 +1,18 @@
 module car-backend
 
-go 1.22
+go 1.23
+
+toolchain go1.23.4
 
 require (
 	github.com/GoogleCloudPlatform/cloudsql-proxy v1.37.3
+	github.com/MicahParks/keyfunc/v2 v2.1.0
 	github.com/clerk/clerk-sdk-go/v2 v2.2.0
+	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
 	github.com/rs/cors v1.11.1
-	github.com/MicahParks/keyfunc/v2 v2.1.0
-	github.com/golang-jwt/jwt/v5 v5.2.1
 )
 
 require (
@@ -25,6 +27,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/googleapis/gax-go/v2 v2.14.0 // indirect
+	github.com/resend/resend-go/v2 v2.14.0
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.54.0 // indirect
 	go.opentelemetry.io/otel v1.29.0 // indirect

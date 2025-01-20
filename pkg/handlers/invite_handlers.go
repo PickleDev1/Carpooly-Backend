@@ -8,35 +8,57 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/resend/resend-go/v2"
 )
 
 type InviteHandler struct {
-	inviteRepo *repository.InviteRepository
+	inviteRepo  *repository.InviteRepository
+	userRepo    *repository.UserRepository
+	carpoolRepo *repository.CarPoolRepository
 }
 
-func NewInviteHandler(repo *repository.InviteRepository) *InviteHandler {
+func NewInviteHandler(inviteRepo *repository.InviteRepository, userRepo *repository.UserRepository, carpoolRepo *repository.CarPoolRepository) *InviteHandler {
 	return &InviteHandler{
-		inviteRepo: repo,
+		inviteRepo:  inviteRepo,
+		userRepo:    userRepo,
+		carpoolRepo: carpoolRepo,
 	}
 }
 
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
-
 	var invite models.CreateInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&invite); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Create new invite using the from_user as the user UUID
+	// Get sender's details
+	fromUser, err := h.userRepo.GetUserByClerkID(invite.FromUser)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get sender details: %v\"}", err)
+		http.Error(w, "Failed to get sender details", http.StatusInternalServerError)
+		return
+	}
+
+	// Get carpool details
+	carpoolID := uuid.MustParse(invite.CarpoolID)
+	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool details: %v\"}", err)
+		http.Error(w, "Failed to get carpool details", http.StatusInternalServerError)
+		return
+	}
+
+	// Create new invite
 	newInvite := &models.Invite{
 		ID:        uuid.New(),
-		CarpoolID: uuid.MustParse(invite.CarpoolID),
-		FromUser:  uuid.MustParse(invite.FromUser),
+		CarpoolID: carpoolID,
+		FromUser:  fromUser.ID,
 		ToUser:    invite.Email,
 		Message:   invite.Message,
 		Status:    models.InviteStatusPending,
@@ -50,9 +72,57 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Send email invitation
+	if err := h.sendInviteEmail(newInvite, fromUser, carpool); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to send invite email: %v\"}", err)
+		// Continue execution as the invite was created successfully
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newInvite)
+}
+
+func (h *InviteHandler) sendInviteEmail(invite *models.Invite, fromUser *models.User, carpool *models.Carpool) error {
+	resendAPIKey := os.Getenv("RESEND_API_KEY")
+	if resendAPIKey == "" {
+		return fmt.Errorf("RESEND_API_KEY not set")
+	}
+
+	client := resend.NewClient(resendAPIKey)
+
+	htmlContent := fmt.Sprintf(`
+		<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+			<div style="background-color: #4F46E5; padding: 20px; text-align: center;">
+				<h1 style="color: white; margin: 0;">Carpooly Invitation</h1>
+			</div>
+			<div style="padding: 20px; border: 1px solid #ddd; border-top: none;">
+				<p>Hello,</p>
+				<p>You've been invited by %s to join a carpool group: <strong>%s</strong></p>
+				<p>Message from %s:</p>
+				<blockquote style="border-left: 4px solid #4F46E5; margin: 0; padding-left: 20px;">
+					%s
+				</blockquote>
+				<div style="text-align: center; margin-top: 30px;">
+					<a href="https://carpooly-web.vercel.app/invites/%s" 
+					   style="background-color: #4F46E5; color: white; padding: 12px 24px; 
+							  text-decoration: none; border-radius: 4px;">
+						View Invitation
+					</a>
+				</div>
+			</div>
+		</div>
+	`, fromUser.Name, carpool.CarpoolName, fromUser.Name, invite.Message, invite.ID)
+
+	params := &resend.SendEmailRequest{
+		From:    "Carpooly <invites@carpooly.app>",
+		To:      []string{invite.ToUser},
+		Subject: fmt.Sprintf("Join %s's Carpool Group on Carpooly", fromUser.Name),
+		Html:    htmlContent,
+	}
+
+	_, err := client.Emails.Send(params)
+	return err
 }
 
 func (h *InviteHandler) GetInvite(w http.ResponseWriter, r *http.Request) {
