@@ -5,11 +5,12 @@ go 1.22
 require (
 	github.com/GoogleCloudPlatform/cloudsql-proxy v1.37.3
 	github.com/clerk/clerk-sdk-go/v2 v2.2.0
-	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
 	github.com/rs/cors v1.11.1
+	github.com/MicahParks/keyfunc/v2 v2.1.0
+	github.com/golang-jwt/jwt/v5 v5.2.1
 )
 
 require (
@@ -43,8 +44,6 @@ require (
 )
 
 require (
-	github.com/MicahParks/keyfunc/v2 v2.1.0 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.3 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	golang.org/x/crypto v0.30.0 // indirect
 )

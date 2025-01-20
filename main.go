@@ -200,6 +200,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	//api := r.PathPrefix("/api").Subrouter()
 	//users := api.PathPrefix("/users").Subrouter()
 	protected.HandleFunc("/users/me", userHandler.GetCurrentUser).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/active-ride/user_{userID}", carpoolRideHandler.GetUserActiveRides).Methods("GET", "OPTIONS")
 
 	return r
 }
@@ -226,9 +227,9 @@ func main() {
 	// CORS middleware configuration
 	corsMiddleware := cors.New(cors.Options{
 		AllowedOrigins: []string{
-			"http://localhost:8080",
 			"https://carpooly-web.vercel.app",
 			"http://localhost:3000",
+			"http://localhost:8080",
 			"https://car-backend-latest-884945568547.us-west1.run.app",
 		},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},

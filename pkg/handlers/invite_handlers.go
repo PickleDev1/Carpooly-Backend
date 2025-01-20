@@ -146,13 +146,16 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	err = h.inviteRepo.UpdateInviteStatus(r.Context(), inviteID, req.Status)
+	// If status is accepted (1), add user to carpool_members
+	if req.Status == models.InviteStatusAccepted {
+		err = h.inviteRepo.AcceptInvite(r.Context(), inviteID)
+	} else {
+		err = h.inviteRepo.UpdateInviteStatus(r.Context(), inviteID, req.Status)
+	}
+
 	if err != nil {
-		if err.Error() == "invite not found" {
-			http.Error(w, "Invite not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("Failed to update invite status: %v", err), http.StatusInternalServerError)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update invite\",\"error\":\"%v\"}", err)
+		http.Error(w, fmt.Sprintf("Failed to update invite: %v", err), http.StatusInternalServerError)
 		return
 	}
 

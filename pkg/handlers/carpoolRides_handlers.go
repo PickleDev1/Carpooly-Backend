@@ -158,3 +158,19 @@ func (h *CarPoolRideHandler) UpdateCarpoolRideStatus(w http.ResponseWriter, r *h
 
 	w.WriteHeader(http.StatusOK)
 }
+
+func (h *CarPoolRideHandler) GetUserActiveRides(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["userID"]
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting active rides for user\",\"userID\":\"%s\"}", userID)
+
+	rides, err := h.carpoolRideRepo.GetUserActiveRides(r.Context(), userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get active rides\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get active rides", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rides)
+}

@@ -128,3 +128,48 @@ func (r *CarPoolRideRepository) UpdateCarpoolRideStatus(ctx context.Context, rid
 
 	return nil
 }
+
+func (r *CarPoolRideRepository) GetUserActiveRides(ctx context.Context, userID string) ([]models.CarpoolRide, error) {
+	query := `
+        SELECT DISTINCT cr.id, cr.carpool_id, cr.driver_id, cr.status, 
+               cr.location_lat, cr.location_lng, cr.miles_saved, 
+               cr.created_at, cr.updated_at
+        FROM carpool_rides cr
+        JOIN carpools c ON cr.carpool_id = c.id
+        JOIN carpool_members cm ON c.id = cm.carpool_id
+        WHERE cm.user_id = $1
+        AND cr.status = 1  -- Active status
+        ORDER BY cr.created_at DESC
+    `
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing query for user active rides\",\"userID\":\"%s\"}", userID)
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active rides: %v", err)
+	}
+	defer rows.Close()
+
+	var rides []models.CarpoolRide
+	for rows.Next() {
+		var ride models.CarpoolRide
+		err := rows.Scan(
+			&ride.ID,
+			&ride.CarpoolID,
+			&ride.DriverID,
+			&ride.Status,
+			&ride.LocationLat,
+			&ride.LocationLng,
+			&ride.MilesSaved,
+			&ride.CreatedAt,
+			&ride.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan ride: %v", err)
+		}
+		rides = append(rides, ride)
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found active rides\",\"count\":%d}", len(rides))
+	return rides, nil
+}

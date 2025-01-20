@@ -197,3 +197,64 @@ func (r *InviteRepository) UpdateInviteStatus(ctx context.Context, inviteID uuid
 
 	return nil
 }
+
+func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// First get the invite details
+	var invite models.Invite
+	query := `
+        SELECT carpool_id, to_user_email
+        FROM invites
+        WHERE id = $1
+    `
+	err = tx.QueryRowContext(ctx, query, inviteID).Scan(&invite.CarpoolID, &invite.ToUser)
+	if err != nil {
+		return fmt.Errorf("failed to get invite: %v", err)
+	}
+
+	// Get user ID from email
+	var userID uuid.UUID
+	userQuery := `
+        SELECT id
+        FROM users
+        WHERE email = $1
+    `
+	err = tx.QueryRowContext(ctx, userQuery, invite.ToUser).Scan(&userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user ID: %v", err)
+	}
+
+	// Add user to carpool_members
+	memberQuery := `
+        INSERT INTO carpool_members (carpool_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT (carpool_id, user_id) DO NOTHING
+    `
+	_, err = tx.ExecContext(ctx, memberQuery, invite.CarpoolID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to add carpool member: %v", err)
+	}
+
+	// Update invite status to accepted
+	updateQuery := `
+        UPDATE invites
+        SET status = $1, updated_at = NOW()
+        WHERE id = $2
+    `
+	_, err = tx.ExecContext(ctx, updateQuery, models.InviteStatusAccepted, inviteID)
+	if err != nil {
+		return fmt.Errorf("failed to update invite status: %v", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Invite accepted and member added\",\"invite_id\":\"%s\"}", inviteID)
+	return nil
+}
