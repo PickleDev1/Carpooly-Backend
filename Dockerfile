@@ -1,8 +1,8 @@
 # Define the platform argument
 ARG TARGETPLATFORM=linux/amd64
 
-# Use a specific version of golang for better reproducibility
-FROM --platform=$TARGETPLATFORM golang:1.22-bullseye AS builder
+# Update to Go 1.23
+FROM --platform=$TARGETPLATFORM golang:1.23-bullseye AS builder
 
 WORKDIR /app
 

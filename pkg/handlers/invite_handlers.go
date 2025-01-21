@@ -33,26 +33,47 @@ func NewInviteHandler(inviteRepo *repository.InviteRepository, userRepo *reposit
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	var invite models.CreateInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&invite); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request body\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
+	// Log the received request
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Received invite request\",\"from_user\":\"%s\",\"to_email\":\"%s\",\"carpool_id\":\"%s\"}",
+		invite.FromUser, invite.Email, invite.CarpoolID)
+
 	// Get sender's details
-	fromUser, err := h.userRepo.GetUserByClerkID(invite.FromUser)
+	userID, err := uuid.Parse(invite.FromUser)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get sender details: %v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID format\",\"id\":\"%s\",\"error\":\"%v\"}",
+			invite.FromUser, err)
+		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
+		return
+	}
+
+	fromUser, err := h.userRepo.GetUserByID(userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get sender details\",\"user_id\":\"%s\",\"error\":\"%v\"}",
+			userID, err)
 		http.Error(w, "Failed to get sender details", http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found sender details\",\"user_id\":\"%s\",\"name\":\"%s\"}",
+		fromUser.ID, fromUser.Name)
 
 	// Get carpool details
 	carpoolID := uuid.MustParse(invite.CarpoolID)
 	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool details: %v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool details\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
 		http.Error(w, "Failed to get carpool details", http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found carpool details\",\"carpool_id\":\"%s\",\"name\":\"%s\"}",
+		carpool.ID, carpool.CarpoolName)
 
 	// Create new invite
 	newInvite := &models.Invite{
@@ -67,10 +88,14 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.inviteRepo.CreateInvite(r.Context(), newInvite); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create invite: %v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create invite\",\"invite_id\":\"%s\",\"error\":\"%v\"}",
+			newInvite.ID, err)
 		http.Error(w, "Failed to create invite", http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully created invite\",\"invite_id\":\"%s\"}",
+		newInvite.ID)
 
 	// Send email invitation
 	if err := h.sendInviteEmail(newInvite, fromUser, carpool); err != nil {

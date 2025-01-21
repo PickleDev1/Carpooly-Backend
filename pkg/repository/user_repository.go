@@ -156,3 +156,27 @@ func (r *UserRepository) GetUserByClerkID(clerkID string) (*models.User, error) 
 
 	return &user, nil
 }
+
+func (r *UserRepository) GetUserByID(id uuid.UUID) (*models.User, error) {
+	var user models.User
+	query := `
+        SELECT id, clerk_id, email, name, display_name, city, state, created_at, updated_at
+        FROM users
+        WHERE id = $1
+    `
+	err := r.db.QueryRow(query, id).Scan(
+		&user.ID,
+		&user.ClerkID,
+		&user.Email,
+		&user.Name,
+		&user.DisplayName,
+		&user.City,
+		&user.State,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
