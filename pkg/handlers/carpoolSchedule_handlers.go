@@ -147,3 +147,28 @@ func (h *CarpoolScheduleHandler) GetCarpoolSchedules(w http.ResponseWriter, r *h
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(schedules)
 }
+
+func (h *CarpoolScheduleHandler) GetScheduleByID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	scheduleID, err := uuid.Parse(vars["scheduleID"])
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid schedule ID format\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid schedule ID", http.StatusBadRequest)
+		return
+	}
+
+	schedule, err := h.scheduleRepo.GetScheduleByID(r.Context(), scheduleID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get schedule\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get schedule", http.StatusInternalServerError)
+		return
+	}
+
+	if schedule == nil {
+		http.Error(w, "Schedule not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(schedule)
+}

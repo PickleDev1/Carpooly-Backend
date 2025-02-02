@@ -166,7 +166,13 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	// Add Clerk webhook endpoint to the same webhookRouter
 	webhookRouter.HandleFunc("/webhooks/clerk", webhookHandler.HandleClerkWebhook).Methods("POST")
 
-	// Protected routes with JWT auth (everything else)
+	// Unprotected routes
+	r.HandleFunc("/webhook", webhookHandler.HandleClerkWebhook).Methods("POST")
+	r.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.CreateSchedule).Methods("POST", "OPTIONS")
+	r.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.GetCarpoolSchedules).Methods("GET", "OPTIONS")
+	r.HandleFunc("/schedules/{scheduleID}", scheduleHandler.GetScheduleByID).Methods("GET", "OPTIONS")
+
+	// Protected routes
 	protected := r.PathPrefix("/api").Subrouter()
 	protected.Use(clerkhttp.WithHeaderAuthorization())
 	protected.Use(middleware.AuthMiddleware(db))
@@ -209,10 +215,6 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	//users := api.PathPrefix("/users").Subrouter()
 	protected.HandleFunc("/users/me", userHandler.GetCurrentUser).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/active-ride/user_{userID}", carpoolRideHandler.GetUserActiveRides).Methods("GET", "OPTIONS")
-
-	// Add the new schedule route in the protected routes section
-	protected.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.CreateSchedule).Methods("POST")
-	protected.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.GetCarpoolSchedules).Methods("GET")
 
 	return r
 }

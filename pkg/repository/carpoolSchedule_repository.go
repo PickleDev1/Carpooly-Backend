@@ -97,3 +97,35 @@ func (r *CarpoolScheduleRepository) GetCarpoolSchedules(ctx context.Context, car
 
 	return schedules, nil
 }
+
+func (r *CarpoolScheduleRepository) GetScheduleByID(ctx context.Context, scheduleID uuid.UUID) (*models.CarpoolSchedule, error) {
+	query := `
+		SELECT id, carpool_id, schedule_type, start_date, end_date,
+			   day_of_week, start_time, repeat_interval, created_at, updated_at
+		FROM carpool_schedules
+		WHERE id = $1
+	`
+
+	schedule := &models.CarpoolSchedule{}
+	err := r.db.QueryRowContext(ctx, query, scheduleID).Scan(
+		&schedule.ID,
+		&schedule.CarpoolID,
+		&schedule.ScheduleType,
+		&schedule.StartDate,
+		&schedule.EndDate,
+		&schedule.DayOfWeek,
+		&schedule.StartTime,
+		&schedule.RepeatInterval,
+		&schedule.CreatedAt,
+		&schedule.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get schedule: %v", err)
+	}
+
+	return schedule, nil
+}
