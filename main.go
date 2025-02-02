@@ -120,6 +120,12 @@ func setupDatabase() *sql.DB {
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
+	if err := db.Ping(); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to ping database\",\"error\":\"%v\"}", err)
+		os.Exit(1)
+	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully connected to database\"}")
+
 	return db
 }
 
@@ -132,7 +138,9 @@ func setupClerk() {
 	clerk.SetKey(clerkSecretKey)
 }
 
-func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler) *mux.Router {
+func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler, scheduleHandler *handlers.CarpoolScheduleHandler) *mux.Router {
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Setting up router\"}")
+
 	r := mux.NewRouter()
 
 	// Health check endpoint (public)
@@ -202,6 +210,10 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/users/me", userHandler.GetCurrentUser).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/active-ride/user_{userID}", carpoolRideHandler.GetUserActiveRides).Methods("GET", "OPTIONS")
 
+	// Add the new schedule route in the protected routes section
+	protected.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.CreateSchedule).Methods("POST")
+	protected.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.GetCarpoolSchedules).Methods("GET")
+
 	return r
 }
 
@@ -264,6 +276,7 @@ func main() {
 	carpoolRepo := repository.NewCarPoolRepository(db)
 	inviteRepo := repository.NewInviteRepository(db)
 	carpoolRideRepo := repository.NewCarPoolRideRepository(db)
+	scheduleRepo := repository.NewCarpoolScheduleRepository(db)
 
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(userRepo)
@@ -271,8 +284,9 @@ func main() {
 	inviteHandler := handlers.NewInviteHandler(inviteRepo, userRepo, carpoolRepo)
 	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo)
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
+	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo)
 
-	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler)
+	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {

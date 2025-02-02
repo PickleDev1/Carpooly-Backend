@@ -144,16 +144,39 @@ func (r *UserRepository) GetUserIDByClerkID(ctx context.Context, clerkID string)
 }
 
 func (r *UserRepository) GetUserByClerkID(clerkID string) (*models.User, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting user by Clerk ID\",\"clerk_id\":\"%s\"}", clerkID)
+
 	var user models.User
-	err := r.db.QueryRow(
-		"SELECT id, email, name, clerk_id, created_at, updated_at FROM users WHERE clerk_id = $1",
-		clerkID,
-	).Scan(&user.ID, &user.Email, &user.Name, &user.ClerkID, &user.CreatedAt, &user.UpdatedAt)
+	query := `
+        SELECT id, clerk_id, email, name, display_name, city, state, created_at, updated_at
+        FROM users
+        WHERE clerk_id = $1
+    `
+
+	err := r.db.QueryRow(query, clerkID).Scan(
+		&user.ID,
+		&user.ClerkID,
+		&user.Email,
+		&user.Name,
+		&user.DisplayName,
+		&user.City,
+		&user.State,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
 
 	if err != nil {
-		return nil, err
+		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"No user found\",\"clerk_id\":\"%s\"}", clerkID)
+			return nil, fmt.Errorf("user not found")
+		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database error getting user\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
+			clerkID, err)
+		return nil, fmt.Errorf("failed to get user: %v", err)
 	}
 
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found user\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}",
+		user.ClerkID, user.ID)
 	return &user, nil
 }
 

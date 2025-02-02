@@ -165,6 +165,7 @@ func (h *InviteHandler) GetInvite(w http.ResponseWriter, r *http.Request) {
 	invite, err := h.inviteRepo.GetInvite(r.Context(), inviteID)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invite not found\",\"invite_id\":\"%s\"}", inviteID)
 			http.Error(w, "Invite not found", http.StatusNotFound)
 			return
 		}
@@ -199,28 +200,52 @@ func (h *InviteHandler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *InviteHandler) GetUserInvites(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Starting GetUserInvites handler\",\"method\":\"%s\",\"path\":\"%s\"}",
+		r.Method, r.URL.Path)
+
+	// Log request headers
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Request headers\",\"auth\":\"%s\",\"content-type\":\"%s\"}",
+		r.Header.Get("Authorization"), r.Header.Get("Content-Type"))
+
 	w.Header().Set("Content-Type", "application/json")
 
 	vars := mux.Vars(r)
-	userIDStr := vars["userID"]
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting invites for userID\",\"userID\":\"%s\"}", userIDStr)
+	clerkID := vars["userID"]
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Looking up user by Clerk ID\",\"clerk_id\":\"%s\"}", clerkID)
 
-	userID, err := uuid.Parse(userIDStr)
+	// First get the user by their Clerk ID
+	user, err := h.userRepo.GetUserByClerkID(clerkID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID format\",\"error\":\"%v\"}", err)
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user by Clerk ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
+			clerkID, err)
+		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
-	invites, err := h.inviteRepo.GetUserInvites(r.Context(), userID)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found user\",\"clerk_id\":\"%s\",\"user_id\":\"%s\",\"email\":\"%s\"}",
+		clerkID, user.ID, user.Email)
+
+	invites, err := h.inviteRepo.GetUserInvites(r.Context(), user.ID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user invites\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user invites\",\"user_id\":\"%s\",\"error\":\"%v\"}",
+			user.ID, err)
 		http.Error(w, fmt.Sprintf("Failed to get user invites: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Retrieved invites\",\"count\":%d}", len(invites))
-	json.NewEncoder(w).Encode(invites)
+	// Log the response data
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Retrieved invites\",\"clerk_id\":\"%s\",\"user_id\":\"%s\",\"count\":%d}",
+		clerkID, user.ID, len(invites))
+
+	if err := json.NewEncoder(w).Encode(invites); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"user_id\":\"%s\",\"error\":\"%v\"}",
+			user.ID, err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully sent invites response\",\"clerk_id\":\"%s\",\"user_id\":\"%s\",\"count\":%d}",
+		clerkID, user.ID, len(invites))
 }
 
 func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Request) {

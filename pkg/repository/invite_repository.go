@@ -49,14 +49,17 @@ func (r *InviteRepository) CreateInvite(ctx context.Context, invite *models.Invi
 }
 
 func (r *InviteRepository) GetInvite(ctx context.Context, inviteID uuid.UUID) (*models.Invite, error) {
-	invite := &models.Invite{}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting invite from database\",\"invite_id\":\"%s\"}", inviteID)
 
+	invite := &models.Invite{}
 	query := `
-            SELECT id, from_user, to_user, carpool_id, message, status, created_at, updated_at
-            FROM invites
-            WHERE id = $1
+        SELECT id, from_user, to_user_email, carpool_id, message, status, created_at, updated_at
+        FROM invites
+        WHERE id = $1
     `
-	//Just a little note
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing query\",\"invite_id\":\"%s\",\"query\":%q}",
+		inviteID, query)
 
 	err := r.db.QueryRowContext(ctx, query, inviteID).Scan(
 		&invite.ID,
@@ -68,13 +71,19 @@ func (r *InviteRepository) GetInvite(ctx context.Context, inviteID uuid.UUID) (*
 		&invite.CreatedAt,
 		&invite.UpdatedAt,
 	)
+
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"No invite found\",\"invite_id\":\"%s\"}", inviteID)
 			return nil, nil
 		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database error getting invite\",\"invite_id\":\"%s\",\"error\":\"%v\"}",
+			inviteID, err)
 		return nil, fmt.Errorf("failed to get invite: %w", err)
 	}
 
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully retrieved invite\",\"invite_id\":\"%s\",\"status\":%d}",
+		invite.ID, invite.Status)
 	return invite, nil
 }
 
