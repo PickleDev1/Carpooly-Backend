@@ -95,16 +95,15 @@ func (h *CarpoolScheduleHandler) CreateSchedule(w http.ResponseWriter, r *http.R
 	}
 
 	schedule := &models.CarpoolSchedule{
-		ID:             uuid.New(),
-		CarpoolID:      carpoolID,
-		ScheduleType:   req.ScheduleType,
-		StartDate:      req.StartDate,
-		EndDate:        req.EndDate,
-		DayOfWeek:      req.DayOfWeek,
-		StartTime:      req.StartTime,
-		RepeatInterval: req.RepeatInterval,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		ID:           uuid.New(),
+		CarpoolID:    carpoolID,
+		ScheduleType: req.ScheduleType,
+		StartDate:    req.StartDate,
+		EndDate:      req.EndDate,
+		DayOfWeek:    req.DayOfWeek,
+		StartTime:    req.StartTime,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
 	if err := h.scheduleRepo.CreateCarpoolSchedule(r.Context(), schedule); err != nil {

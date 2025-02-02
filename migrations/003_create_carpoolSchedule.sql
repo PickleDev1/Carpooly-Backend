@@ -11,3 +11,5 @@ CREATE TABLE carpool_schedules (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (carpool_id) REFERENCES carpools(id) ON DELETE CASCADE
 );
+
+ALTER TABLE carpool_schedules DROP COLUMN repeat_interval;

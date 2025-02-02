@@ -22,8 +22,10 @@ func (r *CarpoolScheduleRepository) CreateCarpoolSchedule(ctx context.Context, s
 	query := `
 		INSERT INTO carpool_schedules (
 			id, carpool_id, schedule_type, start_date, end_date,
-			day_of_week, start_time, repeat_interval, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			day_of_week, start_time, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+		)
 	`
 
 	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Creating carpool schedule\",\"schedule\":%+v}", schedule)
@@ -36,11 +38,10 @@ func (r *CarpoolScheduleRepository) CreateCarpoolSchedule(ctx context.Context, s
 		schedule.EndDate,
 		schedule.DayOfWeek,
 		schedule.StartTime,
-		schedule.RepeatInterval,
 	)
 
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database error\",\"error\":\"%v\",\"query\":%q,\"values\":[\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"]}",
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database error\",\"error\":\"%v\",\"query\":%q,\"values\":[\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"]}",
 			err, query,
 			schedule.ID,
 			schedule.CarpoolID,
@@ -49,7 +50,7 @@ func (r *CarpoolScheduleRepository) CreateCarpoolSchedule(ctx context.Context, s
 			schedule.EndDate,
 			schedule.DayOfWeek,
 			schedule.StartTime,
-			schedule.RepeatInterval)
+		)
 		return fmt.Errorf("failed to create carpool schedule: %v", err)
 	}
 
@@ -60,7 +61,7 @@ func (r *CarpoolScheduleRepository) CreateCarpoolSchedule(ctx context.Context, s
 func (r *CarpoolScheduleRepository) GetCarpoolSchedules(ctx context.Context, carpoolID uuid.UUID) ([]models.CarpoolSchedule, error) {
 	query := `
 		SELECT id, carpool_id, schedule_type, start_date, end_date,
-			   day_of_week, start_time, repeat_interval, created_at, updated_at
+			   day_of_week, start_time, created_at, updated_at
 		FROM carpool_schedules
 		WHERE carpool_id = $1
 		ORDER BY created_at DESC
@@ -84,7 +85,6 @@ func (r *CarpoolScheduleRepository) GetCarpoolSchedules(ctx context.Context, car
 			&schedule.EndDate,
 			&schedule.DayOfWeek,
 			&schedule.StartTime,
-			&schedule.RepeatInterval,
 			&schedule.CreatedAt,
 			&schedule.UpdatedAt,
 		)
@@ -101,7 +101,7 @@ func (r *CarpoolScheduleRepository) GetCarpoolSchedules(ctx context.Context, car
 func (r *CarpoolScheduleRepository) GetScheduleByID(ctx context.Context, scheduleID uuid.UUID) (*models.CarpoolSchedule, error) {
 	query := `
 		SELECT id, carpool_id, schedule_type, start_date, end_date,
-			   day_of_week, start_time, repeat_interval, created_at, updated_at
+			   day_of_week, start_time, created_at, updated_at
 		FROM carpool_schedules
 		WHERE id = $1
 	`
@@ -115,7 +115,6 @@ func (r *CarpoolScheduleRepository) GetScheduleByID(ctx context.Context, schedul
 		&schedule.EndDate,
 		&schedule.DayOfWeek,
 		&schedule.StartTime,
-		&schedule.RepeatInterval,
 		&schedule.CreatedAt,
 		&schedule.UpdatedAt,
 	)
