@@ -110,24 +110,29 @@ func (r *InviteRepository) DeleteInvite(ctx context.Context, inviteID uuid.UUID)
 	return nil
 }
 
-func (r *InviteRepository) GetUserInvites(ctx context.Context, userID uuid.UUID) ([]models.Invite, error) {
-	var invites []models.Invite
-	var userEmail string
+func (r *InviteRepository) GetUserInvites(ctx context.Context, email string) ([]models.Invite, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting invites for email\",\"email\":\"%s\"}", email)
 
-	// First get the user's email
-	emailQuery := `SELECT email FROM users WHERE id = $1`
-	err := r.db.QueryRowContext(ctx, emailQuery, userID).Scan(&userEmail)
+	// First, let's check if there are any invites at all with this email
+	checkQuery := `SELECT COUNT(*) FROM invites WHERE to_user_email = $1`
+	var count int
+	err := r.db.QueryRowContext(ctx, checkQuery, email).Scan(&count)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user email\",\"error\":\"%v\"}", err)
-		return nil, fmt.Errorf("failed to get user email: %v", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to check invites count\",\"error\":\"%v\"}", err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Total invites found (including all statuses)\",\"count\":%d,\"email\":\"%s\"}", count, email)
 	}
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found user email\",\"email\":\"%s\"}", userEmail)
-
-	// Then get the invites using the email
 	query := `
         SELECT 
-            i.*,
+            i.id,
+            i.carpool_id,
+            i.from_user,
+            i.to_user_email,
+            i.message,
+            i.status,
+            i.created_at,
+            i.updated_at,
             c.carpool_name,
             u.email as sender_email
         FROM invites i
@@ -135,50 +140,44 @@ func (r *InviteRepository) GetUserInvites(ctx context.Context, userID uuid.UUID)
         JOIN users u ON i.from_user = u.id
         WHERE i.to_user_email = $1 AND i.status = 0
     `
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing invites query\",\"email\":\"%s\"}", userEmail)
 
-	rows, err := r.db.QueryContext(ctx, query, userEmail)
+	// Log the exact query and parameters being used
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing query\",\"query\":\"%s\",\"email\":\"%s\"}",
+		query, email)
+
+	rows, err := r.db.QueryContext(ctx, query, email)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database query failed\",\"error\":\"%v\"}", err)
 		return nil, fmt.Errorf("failed to get user invites: %v", err)
 	}
 	defer rows.Close()
 
+	var invites []models.Invite
 	for rows.Next() {
 		var invite models.Invite
-		var carpoolName string
-		var senderEmail string
-
 		err := rows.Scan(
 			&invite.ID,
+			&invite.CarpoolID,
 			&invite.FromUser,
 			&invite.ToUser,
-			&invite.CarpoolID,
 			&invite.Message,
 			&invite.Status,
 			&invite.CreatedAt,
 			&invite.UpdatedAt,
-			&carpoolName,
-			&senderEmail,
+			&invite.CarpoolName,
+			&invite.SenderEmail,
 		)
 		if err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan row\",\"error\":\"%v\"}", err)
-			return nil, fmt.Errorf("failed to scan invite row: %v", err)
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan invite\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to scan invite: %v", err)
 		}
-
-		invite.CarpoolName = carpoolName
-		invite.SenderEmail = senderEmail
-
-		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Invite details\",\"sender_email\":\"%s\",\"carpool_name\":\"%s\"}",
-			senderEmail, carpoolName)
-
 		invites = append(invites, invite)
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found invite\",\"invite_id\":\"%s\",\"status\":%d}",
+			invite.ID, invite.Status)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate over invite rows: %v", err)
-	}
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Retrieved invites\",\"count\":%d}", len(invites))
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Retrieved invites\",\"count\":%d,\"email\":\"%s\"}",
+		len(invites), email)
 	return invites, nil
 }
 
