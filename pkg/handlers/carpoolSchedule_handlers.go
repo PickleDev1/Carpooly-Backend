@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"bytes"
@@ -28,38 +29,68 @@ func NewCarpoolScheduleHandler(scheduleRepo *repository.CarpoolScheduleRepositor
 }
 
 func (h *CarpoolScheduleHandler) CreateSchedule(w http.ResponseWriter, r *http.Request) {
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Starting CreateSchedule handler\",\"method\":\"%s\",\"url\":\"%s\",\"headers\":%v}",
-		r.Method, r.URL.String(), r.Header)
+	// Log start of handler with full request details
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting CreateSchedule handler\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
 
-	// Log auth header specifically
-	authHeader := r.Header.Get("Authorization")
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Auth header\",\"auth\":\"%s\"}", authHeader)
+	// Log all request headers
+	headers := make(map[string]string)
+	for k, v := range r.Header {
+		headers[k] = v[0]
+	}
+	headerJSON, _ := json.Marshal(headers)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Request headers\",\"headers\":%s}", string(headerJSON))
 
-	// Log request body
+	// Read and log request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to read request body\",\"error\":\"%v\"}", err)
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Received request body\",\"body\":%s}", string(body))
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Raw request body\",\"body\":%s}", string(body))
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
 
+	// Parse request
 	var req models.CreateScheduleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request body\",\"error\":\"%v\",\"body\":%s}", err, string(body))
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request body\",\"error\":\"%v\",\"body\":%s}",
+			err, string(body))
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Decoded request\",\"carpool_id\":\"%s\",\"schedule_type\":\"%s\"}",
-		req.CarpoolID, req.ScheduleType)
+	// Log parsed request
+	reqJSON, _ := json.Marshal(req)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Parsed request\",\"request\":%s}", string(reqJSON))
 
-	// Validate schedule type
-	if req.ScheduleType != "one_time" && req.ScheduleType != "daily" && req.ScheduleType != "weekly" {
+	// Normalize schedule type to lowercase
+	req.ScheduleType = strings.ToLower(req.ScheduleType)
+
+	// Map recurring options to schedule types
+	switch req.ScheduleType {
+	case "daily", "DAILY":
+		req.ScheduleType = "daily"
+	case "weekly", "WEEKLY":
+		req.ScheduleType = "weekly"
+	case "one_time", "ONE_TIME":
+		req.ScheduleType = "one_time"
+	default:
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid schedule type\",\"type\":\"%s\"}", req.ScheduleType)
-		http.Error(w, "Invalid schedule type. Must be one of: one_time, daily, weekly", http.StatusBadRequest)
+		http.Error(w, "Invalid schedule type. Must be one of: ONE_TIME, DAILY, WEEKLY", http.StatusBadRequest)
 		return
+	}
+
+	// Validate day_of_week for weekly schedules
+	if req.ScheduleType == "weekly" {
+		if req.DayOfWeek == nil {
+			http.Error(w, "Day of week is required for weekly schedules", http.StatusBadRequest)
+			return
+		}
+		if *req.DayOfWeek < 0 || *req.DayOfWeek > 6 {
+			http.Error(w, "Day of week must be between 0 (Sunday) and 6 (Saturday)", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Parse carpool ID
@@ -82,18 +113,7 @@ func (h *CarpoolScheduleHandler) CreateSchedule(w http.ResponseWriter, r *http.R
 	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found carpool\",\"carpool_id\":\"%s\",\"carpool_name\":\"%s\"}",
 		carpool.ID, carpool.CarpoolName)
 
-	// Validate day_of_week for weekly schedules
-	if req.ScheduleType == "weekly" {
-		if req.DayOfWeek == nil {
-			http.Error(w, "Day of week is required for weekly schedules", http.StatusBadRequest)
-			return
-		}
-		if *req.DayOfWeek < 0 || *req.DayOfWeek > 6 {
-			http.Error(w, "Day of week must be between 0 (Sunday) and 6 (Saturday)", http.StatusBadRequest)
-			return
-		}
-	}
-
+	// Create schedule object
 	schedule := &models.CarpoolSchedule{
 		ID:           uuid.New(),
 		CarpoolID:    carpoolID,
@@ -106,14 +126,30 @@ func (h *CarpoolScheduleHandler) CreateSchedule(w http.ResponseWriter, r *http.R
 		UpdatedAt:    time.Now(),
 	}
 
+	// Log schedule object before creation
+	scheduleJSON, _ := json.Marshal(schedule)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Attempting to create schedule\",\"schedule\":%s}", string(scheduleJSON))
+
+	// Create schedule
 	if err := h.scheduleRepo.CreateCarpoolSchedule(r.Context(), schedule); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create schedule\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create schedule\",\"error\":\"%v\",\"schedule\":%s}",
+			err, string(scheduleJSON))
 		http.Error(w, "Failed to create schedule", http.StatusInternalServerError)
 		return
 	}
 
+	// Log success and response
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Schedule created successfully\",\"schedule_id\":\"%s\",\"carpool_id\":\"%s\"}",
+		schedule.ID, schedule.CarpoolID)
+
+	// Send response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+
+	// Log response before sending
+	responseJSON, _ := json.Marshal(schedule)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Sending response\",\"status\":201,\"body\":%s}", string(responseJSON))
+
 	json.NewEncoder(w).Encode(schedule)
 }
 

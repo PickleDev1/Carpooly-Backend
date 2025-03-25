@@ -222,21 +222,6 @@ func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUI
 	return carpools, nil
 }
 
-func (r *CarPoolRepository) GetUserIDByClerkID(ctx context.Context, clerkID string) (uuid.UUID, error) {
-	var userID uuid.UUID
-	query := `SELECT id FROM users WHERE clerk_id = $1`
-
-	err := r.db.QueryRowContext(ctx, query, clerkID).Scan(&userID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return uuid.Nil, fmt.Errorf("user not found")
-		}
-		return uuid.Nil, fmt.Errorf("failed to get user ID: %w", err)
-	}
-
-	return userID, nil
-}
-
 // Add methods like:
 // UpdateCarPool
 // SearchCarPools
