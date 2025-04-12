@@ -171,6 +171,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	r.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.CreateSchedule).Methods("POST", "OPTIONS")
 	r.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.GetCarpoolSchedules).Methods("GET", "OPTIONS")
 	r.HandleFunc("/schedules/{scheduleID}", scheduleHandler.GetScheduleByID).Methods("GET", "OPTIONS")
+	r.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.UpdateSchedule).Methods("PUT", "OPTIONS")
 
 	// Protected routes
 	protected := r.PathPrefix("/api").Subrouter()
@@ -284,7 +285,7 @@ func main() {
 	userHandler := handlers.NewUserHandler(userRepo)
 	carpoolHandler := handlers.NewCarPoolHandler(carpoolRepo, userRepo)
 	inviteHandler := handlers.NewInviteHandler(inviteRepo, userRepo, carpoolRepo)
-	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo)
+	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo, userRepo)
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
 	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo)
 

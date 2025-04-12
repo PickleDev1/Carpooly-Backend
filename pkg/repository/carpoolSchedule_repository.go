@@ -128,3 +128,71 @@ func (r *CarpoolScheduleRepository) GetScheduleByID(ctx context.Context, schedul
 
 	return schedule, nil
 }
+
+func (r *CarpoolScheduleRepository) UpdateSchedule(ctx context.Context, schedule *models.CarpoolSchedule) error {
+	query := `
+		UPDATE carpool_schedules
+		SET schedule_type = $1,
+			start_date = $2,
+			end_date = $3,
+			day_of_week = $4,
+			start_time = $5,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = $6
+	`
+
+	result, err := r.db.ExecContext(ctx, query,
+		schedule.ScheduleType,
+		schedule.StartDate,
+		schedule.EndDate,
+		schedule.DayOfWeek,
+		schedule.StartTime,
+		schedule.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update schedule: %v", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %v", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("schedule not found")
+	}
+
+	return nil
+}
+
+func (r *CarpoolScheduleRepository) UpdateScheduleByCarpool(ctx context.Context, schedule *models.CarpoolSchedule) error {
+	query := `
+		UPDATE carpool_schedules
+		SET schedule_type = $1,
+			start_date = $2,
+			end_date = $3,
+			day_of_week = $4,
+			start_time = $5,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE carpool_id = $6
+		RETURNING id
+	`
+
+	err := r.db.QueryRowContext(ctx, query,
+		schedule.ScheduleType,
+		schedule.StartDate,
+		schedule.EndDate,
+		schedule.DayOfWeek,
+		schedule.StartTime,
+		schedule.CarpoolID,
+	).Scan(&schedule.ID)
+
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("no schedule found for carpool")
+	}
+	if err != nil {
+		return fmt.Errorf("failed to update schedule: %v", err)
+	}
+
+	return nil
+}

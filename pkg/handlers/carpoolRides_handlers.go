@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -16,11 +17,13 @@ import (
 
 type CarPoolRideHandler struct {
 	carpoolRideRepo *repository.CarPoolRideRepository
+	userRepo        *repository.UserRepository
 }
 
-func NewCarPoolRideHandler(repo *repository.CarPoolRideRepository) *CarPoolRideHandler {
+func NewCarPoolRideHandler(carpoolRideRepo *repository.CarPoolRideRepository, userRepo *repository.UserRepository) *CarPoolRideHandler {
 	return &CarPoolRideHandler{
-		carpoolRideRepo: repo,
+		carpoolRideRepo: carpoolRideRepo,
+		userRepo:        userRepo,
 	}
 }
 
@@ -160,13 +163,34 @@ func (h *CarPoolRideHandler) UpdateCarpoolRideStatus(w http.ResponseWriter, r *h
 }
 
 func (h *CarPoolRideHandler) GetUserActiveRides(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	userID := vars["userID"]
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting active rides for user\",\"userID\":\"%s\"}", userID)
+	// Log request details
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetUserActiveRides called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
 
-	rides, err := h.carpoolRideRepo.GetUserActiveRides(r.Context(), userID)
+	vars := mux.Vars(r)
+	rawClerkID := vars["userID"]
+
+	// Add "user_" prefix if it's missing
+	clerkID := rawClerkID
+	if !strings.HasPrefix(rawClerkID, "user_") {
+		clerkID = "user_" + rawClerkID
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting active rides for clerk ID\",\"clerk_id\":\"%s\"}", clerkID)
+
+	// Convert clerk_id to user_id
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get active rides\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
+			clerkID, err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	rides, err := h.carpoolRideRepo.GetUserActiveRides(r.Context(), userID.String())
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get active rides\",\"user_id\":\"%s\",\"error\":\"%v\"}",
+			userID, err)
 		http.Error(w, "Failed to get active rides", http.StatusInternalServerError)
 		return
 	}

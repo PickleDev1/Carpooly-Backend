@@ -207,3 +207,107 @@ func (h *CarpoolScheduleHandler) GetScheduleByID(w http.ResponseWriter, r *http.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(schedule)
 }
+
+func (h *CarpoolScheduleHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
+	// Log request details with headers
+	headers := make(map[string]string)
+	for k, v := range r.Header {
+		headers[k] = v[0]
+	}
+	headerJSON, _ := json.Marshal(headers)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting UpdateSchedule handler\",\"method\":\"%s\",\"url\":\"%s\",\"headers\":%s}",
+		r.Method, r.URL.String(), string(headerJSON))
+
+	vars := mux.Vars(r)
+	carpoolID, err := uuid.Parse(vars["carpoolID"])
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			vars["carpoolID"], err)
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed carpool ID\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	// Verify carpool exists
+	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
+		http.Error(w, "Carpool not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found carpool\",\"carpool_id\":\"%s\",\"carpool_name\":\"%s\"}",
+		carpool.ID, carpool.CarpoolName)
+
+	// Read and log request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to read request body\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Raw request body\",\"body\":%s}", string(body))
+	r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	var req models.CreateScheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request\",\"error\":\"%v\",\"raw_body\":%s}",
+			err, string(body))
+		http.Error(w, "Invalid request format", http.StatusBadRequest)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed request body\",\"request\":%+v}", req)
+
+	// Update schedule object
+	schedule := &models.CarpoolSchedule{
+		CarpoolID:    carpoolID,
+		ScheduleType: strings.ToLower(req.ScheduleType),
+		StartDate:    req.StartDate,
+		EndDate:      req.EndDate,
+		DayOfWeek:    req.DayOfWeek,
+		StartTime:    req.StartTime,
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Created schedule object\",\"schedule\":%+v}", schedule)
+
+	// Validate schedule type
+	switch schedule.ScheduleType {
+	case "daily", "weekly", "one_time":
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Valid schedule type\",\"type\":\"%s\"}", schedule.ScheduleType)
+	default:
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid schedule type\",\"type\":\"%s\"}", schedule.ScheduleType)
+		http.Error(w, "Invalid schedule type. Must be one of: one_time, daily, weekly", http.StatusBadRequest)
+		return
+	}
+
+	// Validate day_of_week for weekly schedules
+	if schedule.ScheduleType == "weekly" {
+		if schedule.DayOfWeek == nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Missing day of week for weekly schedule\"}")
+			http.Error(w, "Day of week is required for weekly schedules", http.StatusBadRequest)
+			return
+		}
+		if *schedule.DayOfWeek < 0 || *schedule.DayOfWeek > 6 {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid day of week\",\"day\":%d}", *schedule.DayOfWeek)
+			http.Error(w, "Day of week must be between 0 (Sunday) and 6 (Saturday)", http.StatusBadRequest)
+			return
+		}
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Valid day of week\",\"day\":%d}", *schedule.DayOfWeek)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Attempting to update schedule\",\"carpool_id\":\"%s\"}", carpoolID)
+	err = h.scheduleRepo.UpdateScheduleByCarpool(r.Context(), schedule)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update schedule\",\"carpool_id\":\"%s\",\"error\":\"%v\",\"schedule\":%+v}",
+			carpoolID, err, schedule)
+		http.Error(w, "Failed to update schedule", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully updated schedule\",\"carpool_id\":\"%s\",\"schedule_id\":\"%s\"}",
+		carpoolID, schedule.ID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	responseJSON, _ := json.Marshal(schedule)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Sending response\",\"body\":%s}", string(responseJSON))
+	json.NewEncoder(w).Encode(schedule)
+}
