@@ -222,6 +222,49 @@ func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUI
 	return carpools, nil
 }
 
+func (r *CarPoolRepository) GetCarpoolMembers(ctx context.Context, carpoolID uuid.UUID) ([]models.User, error) {
+	query := `
+        SELECT u.id, u.clerk_id, u.email, u.name, u.display_name, 
+               u.city, u.state, u.created_at, u.updated_at
+        FROM users u
+        JOIN carpool_members cm ON u.id = cm.user_id
+        WHERE cm.carpool_id = $1
+        ORDER BY u.created_at DESC
+    `
+
+	rows, err := r.db.QueryContext(ctx, query, carpoolID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query carpool members: %v", err)
+	}
+	defer rows.Close()
+
+	var members []models.User
+	for rows.Next() {
+		var member models.User
+		err := rows.Scan(
+			&member.ID,
+			&member.ClerkID,
+			&member.Email,
+			&member.Name,
+			&member.DisplayName,
+			&member.City,
+			&member.State,
+			&member.CreatedAt,
+			&member.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan member: %v", err)
+		}
+		members = append(members, member)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating over rows: %v", err)
+	}
+
+	return members, nil
+}
+
 // Add methods like:
 // UpdateCarPool
 // SearchCarPools

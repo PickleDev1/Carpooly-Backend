@@ -182,3 +182,35 @@ func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request)
 
 	json.NewEncoder(w).Encode(carpools)
 }
+
+func (h *CarPoolHandler) GetCarpoolMembers(w http.ResponseWriter, r *http.Request) {
+	// Log request details
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetCarpoolMembers called\",\"method\":\"%s\",\"url\":\"%s\"}",
+		r.Method, r.URL.String())
+
+	vars := mux.Vars(r)
+	carpoolID, err := uuid.Parse(vars["carpoolID"])
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+
+	// Verify carpool exists
+	_, err = h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool\",\"error\":\"%v\"}", err)
+		http.Error(w, "Carpool not found", http.StatusNotFound)
+		return
+	}
+
+	members, err := h.carpoolRepo.GetCarpoolMembers(r.Context(), carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool members\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get carpool members", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(members)
+}
