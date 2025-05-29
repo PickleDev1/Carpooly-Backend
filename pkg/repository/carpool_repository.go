@@ -281,12 +281,11 @@ func (r *CarPoolRepository) AddCarpoolMember(ctx context.Context, carpoolID, use
 		return fmt.Errorf("failed to add carpool member: %v", err)
 	}
 
-	// Get all future carpool rides
+	// Get all rides (both past and future) for this carpool
 	ridesQuery := `
         SELECT id, participants 
         FROM carpool_rides 
-        WHERE carpool_id = $1 
-        AND start_time >= NOW()
+        WHERE carpool_id = $1
     `
 	rows, err := tx.QueryContext(ctx, ridesQuery, carpoolID)
 	if err != nil {
