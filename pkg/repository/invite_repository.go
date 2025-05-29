@@ -11,11 +11,15 @@ import (
 )
 
 type InviteRepository struct {
-	db *sql.DB
+	db          *sql.DB
+	carpoolRepo *CarPoolRepository
 }
 
 func NewInviteRepository(db *sql.DB) *InviteRepository {
-	return &InviteRepository{db: db}
+	return &InviteRepository{
+		db:          db,
+		carpoolRepo: NewCarPoolRepository(db),
+	}
 }
 
 func (r *InviteRepository) CreateInvite(ctx context.Context, invite *models.Invite) error {
@@ -213,7 +217,7 @@ func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID)
 	}
 	defer tx.Rollback()
 
-	// First get the invite details
+	// Get the invite details
 	var invite models.Invite
 	query := `
         SELECT carpool_id, to_user_email
@@ -237,15 +241,9 @@ func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID)
 		return fmt.Errorf("failed to get user ID: %v", err)
 	}
 
-	// Add user to carpool_members
-	memberQuery := `
-        INSERT INTO carpool_members (carpool_id, user_id)
-        VALUES ($1, $2)
-        ON CONFLICT (carpool_id, user_id) DO NOTHING
-    `
-	_, err = tx.ExecContext(ctx, memberQuery, invite.CarpoolID, userID)
-	if err != nil {
-		return fmt.Errorf("failed to add carpool member: %v", err)
+	// Add member and update rides
+	if err := r.carpoolRepo.AddCarpoolMember(ctx, invite.CarpoolID, userID); err != nil {
+		return fmt.Errorf("failed to add member and update rides: %v", err)
 	}
 
 	// Update invite status to accepted
@@ -263,6 +261,5 @@ func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID)
 		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Invite accepted and member added\",\"invite_id\":\"%s\"}", inviteID)
 	return nil
 }

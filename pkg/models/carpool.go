@@ -31,16 +31,17 @@ type CarpoolMember struct {
 
 // CarpoolRide represents a specific ride instance
 type CarpoolRide struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	CarpoolID   uuid.UUID `json:"carpool_id" db:"carpool_id"`
-	DriverID    uuid.UUID `json:"driver_id" db:"driver_id"`
-	Status      int       `json:"status" db:"status"`
-	LocationLat float64   `json:"location_lat" db:"location_lat"`
-	LocationLng float64   `json:"location_lng" db:"location_lng"`
-	MilesSaved  float64   `json:"miles_saved" db:"miles_saved"`
-	CreatedAt   time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
-	Stops       []Stop    `json:"stops,omitempty"`
+	ID           uuid.UUID `json:"id"`
+	CarpoolID    uuid.UUID `json:"carpool_id"`
+	DriverID     uuid.UUID `json:"driver_id"`
+	StartTime    time.Time `json:"start_time"`
+	Status       int       `json:"status"`
+	LocationLat  float64   `json:"location_lat"`
+	LocationLng  float64   `json:"location_lng"`
+	MilesSaved   float64   `json:"miles_saved"`
+	Participants []User    `json:"participants"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Stop represents a stop in a carpool ride

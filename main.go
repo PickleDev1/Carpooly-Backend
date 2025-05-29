@@ -195,12 +195,14 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.DeleteCarPool).Methods("DELETE")
 	protected.HandleFunc("/carpools/search", carpoolHandler.SearchCarPools).Methods("POST")
 
-	protected.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
+	r.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
 	protected.HandleFunc("/carpools/rides/{rideID}/updateStatus", carpoolRideHandler.UpdateCarpoolRideStatus).Methods("PUT")
 	protected.HandleFunc("/carpools/{id}/rides/{rideID}", carpoolRideHandler.GetCarpoolRide).Methods("GET")
+	r.HandleFunc("/carpools/{id}/rides/{date}", carpoolRideHandler.GetCarpoolRidesByDate).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/carpools/creator/{creatorID}", carpoolHandler.GetCreatorCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/users/{userID}", carpoolHandler.GetUserCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/{carpoolID}/rides/{rideID}", carpoolRideHandler.DeleteCarpoolRide).Methods("DELETE")
+	protected.HandleFunc("/carpools/rides/{rideID}/participants/{userID}", carpoolRideHandler.RemoveParticipant).Methods("DELETE", "OPTIONS")
 
 	protected.HandleFunc("/invites", inviteHandler.CreateInvite).Methods("POST")
 	protected.HandleFunc("/invites/{id}/updateStatus", inviteHandler.UpdateInviteStatus).Methods("PUT")
@@ -286,7 +288,7 @@ func main() {
 	userHandler := handlers.NewUserHandler(userRepo)
 	carpoolHandler := handlers.NewCarPoolHandler(carpoolRepo, userRepo)
 	inviteHandler := handlers.NewInviteHandler(inviteRepo, userRepo, carpoolRepo)
-	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo, userRepo)
+	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo, userRepo, carpoolRepo)
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
 	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo)
 

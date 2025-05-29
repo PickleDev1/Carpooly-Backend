@@ -4,8 +4,10 @@ import (
 	"car-backend/pkg/models"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -27,21 +29,35 @@ func (r *CarPoolRideRepository) CreateCarpoolRide(ctx context.Context, ride *mod
 
 	log.Printf("Creating carpool ride for carpoolID: %s", ride.CarpoolID)
 
+	// Convert participants to JSON
+	participantsJSON, err := json.Marshal(ride.Participants)
+	if err != nil {
+		return fmt.Errorf("failed to marshal participants: %v", err)
+	}
+
 	query := `
 			INSERT INTO carpool_rides (
-				carpool_id, driver_id, status, location_lat, location_lng, miles_saved
-			) VALUES ($1, $2, $3, $4, $5, $6)
+				carpool_id, start_time, status, participants, created_at, updated_at,
+				driver_id, location_lat, location_lng, miles_saved
+			) VALUES ($1, $2, 0, $3, NOW(), NOW(), NULL, NULL, NULL, 0)
 			RETURNING id, created_at, updated_at
 	`
 
 	err = tx.QueryRowContext(ctx, query,
-		ride.CarpoolID, ride.DriverID, ride.Status, ride.LocationLat, ride.LocationLng, ride.MilesSaved,
+		ride.CarpoolID, ride.StartTime, participantsJSON,
 	).Scan(&ride.ID, &ride.CreatedAt, &ride.UpdatedAt)
 
 	if err != nil {
 		log.Printf("Failed to insert carpool ride: %v", err)
 		return fmt.Errorf("failed to create carpool ride: %w", err)
 	}
+
+	// Set default values for the returned ride object
+	ride.DriverID = uuid.Nil
+	ride.LocationLat = 0
+	ride.LocationLng = 0
+	ride.MilesSaved = 0
+	ride.Status = 0 // Default status
 
 	log.Printf("Carpool ride created successfully: %v", ride.ID)
 
@@ -171,5 +187,117 @@ func (r *CarPoolRideRepository) GetUserActiveRides(ctx context.Context, userID s
 	}
 
 	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found active rides\",\"count\":%d}", len(rides))
+	return rides, nil
+}
+
+func (r *CarPoolRideRepository) RemoveParticipant(ctx context.Context, rideID uuid.UUID, userID uuid.UUID) error {
+	query := `
+        UPDATE carpool_rides
+        SET 
+            participants = (
+                SELECT COALESCE(
+                    jsonb_agg(participant)
+                    FILTER (WHERE (participant->>'id')::uuid != $2),
+                    '[]'::jsonb
+                )
+                FROM jsonb_array_elements(participants) participant
+            ),
+            updated_at = NOW()
+        WHERE id = $1
+    `
+
+	result, err := r.db.ExecContext(ctx, query, rideID, userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove participant\",\"error\":\"%v\"}", err)
+		return fmt.Errorf("failed to remove participant: %v", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("error getting rows affected: %v", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("ride not found")
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Participant removed from ride\",\"ride_id\":\"%s\",\"user_id\":\"%s\"}",
+		rideID, userID)
+	return nil
+}
+
+func (r *CarPoolRideRepository) GetCarpoolRidesByDate(ctx context.Context, carpoolID uuid.UUID, date time.Time) ([]models.CarpoolRide, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Fetching rides\",\"carpool_id\":\"%s\",\"date\":\"%s\"}",
+		carpoolID, date.Format("2006-01-02"))
+
+	query := `
+        SELECT id, carpool_id, driver_id, start_time, status, 
+               location_lat, location_lng, miles_saved, participants,
+               created_at, updated_at
+        FROM carpool_rides
+        WHERE carpool_id = $1 
+        AND DATE(start_time) = $2::date
+    `
+
+	rows, err := r.db.QueryContext(ctx, query, carpoolID, date.Format("2006-01-02"))
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Query failed\",\"error\":\"%v\"}", err)
+		return nil, fmt.Errorf("failed to query carpool rides: %w", err)
+	}
+	defer rows.Close()
+
+	var rides []models.CarpoolRide
+	for rows.Next() {
+		var ride models.CarpoolRide
+		var participantsJSON []byte
+		var locationLat, locationLng, milesSaved sql.NullFloat64
+		var driverID sql.NullString
+
+		err := rows.Scan(
+			&ride.ID,
+			&ride.CarpoolID,
+			&driverID,
+			&ride.StartTime,
+			&ride.Status,
+			&locationLat,
+			&locationLng,
+			&milesSaved,
+			&participantsJSON,
+			&ride.CreatedAt,
+			&ride.UpdatedAt,
+		)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Scan failed\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to scan ride: %w", err)
+		}
+
+		// Convert NULL values to zero values
+		if locationLat.Valid {
+			ride.LocationLat = locationLat.Float64
+		}
+		if locationLng.Valid {
+			ride.LocationLng = locationLng.Float64
+		}
+		if milesSaved.Valid {
+			ride.MilesSaved = milesSaved.Float64
+		}
+		if driverID.Valid {
+			ride.DriverID, _ = uuid.Parse(driverID.String)
+		}
+
+		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"JSON unmarshal failed\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to unmarshal participants: %w", err)
+		}
+
+		rides = append(rides, ride)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Found rides\",\"count\":%d}", len(rides))
+
+	if rides == nil {
+		rides = []models.CarpoolRide{}
+	}
+
 	return rides, nil
 }

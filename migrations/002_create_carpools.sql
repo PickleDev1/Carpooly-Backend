@@ -39,6 +39,18 @@ CREATE TABLE carpool_rides (
     FOREIGN KEY (driver_id) REFERENCES users(id) 
 );
 
+ALTER TABLE carpool_rides
+ADD COLUMN participants JSONB DEFAULT '[]'::jsonb;
+
+ALTER TABLE carpool_rides 
+    ALTER COLUMN driver_id DROP NOT NULL,
+    ALTER COLUMN location_lat DROP NOT NULL,
+    ALTER COLUMN location_lng DROP NOT NULL;
+
+    ALTER TABLE carpool_rides 
+ADD COLUMN start_time TIMESTAMP WITH TIME ZONE;
+
+
 -- Create carpool_stops table (references carpool_rides)
 CREATE TABLE carpool_stops (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

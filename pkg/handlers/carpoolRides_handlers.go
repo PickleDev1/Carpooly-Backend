@@ -3,13 +3,13 @@ package handlers
 import (
 	"car-backend/pkg/models"
 	"car-backend/pkg/repository"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -18,17 +18,18 @@ import (
 type CarPoolRideHandler struct {
 	carpoolRideRepo *repository.CarPoolRideRepository
 	userRepo        *repository.UserRepository
+	carpoolRepo     *repository.CarPoolRepository
 }
 
-func NewCarPoolRideHandler(carpoolRideRepo *repository.CarPoolRideRepository, userRepo *repository.UserRepository) *CarPoolRideHandler {
+func NewCarPoolRideHandler(carpoolRideRepo *repository.CarPoolRideRepository, userRepo *repository.UserRepository, carpoolRepo *repository.CarPoolRepository) *CarPoolRideHandler {
 	return &CarPoolRideHandler{
 		carpoolRideRepo: carpoolRideRepo,
 		userRepo:        userRepo,
+		carpoolRepo:     carpoolRepo,
 	}
 }
 
 func (h *CarPoolRideHandler) CreateCarpoolRide(w http.ResponseWriter, r *http.Request) {
-
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -39,33 +40,49 @@ func (h *CarPoolRideHandler) CreateCarpoolRide(w http.ResponseWriter, r *http.Re
 
 	carpoolID, err := uuid.Parse(carpoolIDStr)
 	if err != nil {
-		log.Printf("Invalid carpool ID: %v", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Creating carpool ride for carpoolID: %s", carpoolID)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Creating carpool ride\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	// Get all carpool members first
+	members, err := h.carpoolRepo.GetCarpoolMembers(r.Context(), carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool members\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get carpool members", http.StatusInternalServerError)
+		return
+	}
 
 	var ride models.CarpoolRide
-	decoder := json.NewDecoder(r.Body)
-	err = decoder.Decode(&ride)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&ride); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid request body\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// **Assign carpoolID from URL and print driverID**
+	// Set the carpoolID and participants
 	ride.CarpoolID = carpoolID
-	log.Printf("DriverID: %s", ride.DriverID)
+	ride.Participants = members
+	// Status will default to 0 in the repository
 
-	ctx := context.Background()
-	err = h.carpoolRideRepo.CreateCarpoolRide(ctx, &ride)
-	if err != nil {
-		log.Printf("failed to create carpool ride: %v\n", err)
+	// These will be set by the repository, but we'll initialize them here for clarity
+	ride.DriverID = uuid.Nil
+	ride.LocationLat = 0
+	ride.LocationLng = 0
+	ride.MilesSaved = 0
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Creating ride with participants\",\"carpool_id\":\"%s\",\"participant_count\":%d}",
+		ride.CarpoolID, len(members))
+
+	if err := h.carpoolRideRepo.CreateCarpoolRide(r.Context(), &ride); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create carpool ride\",\"error\":\"%v\"}", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(ride)
 }
@@ -193,6 +210,86 @@ func (h *CarPoolRideHandler) GetUserActiveRides(w http.ResponseWriter, r *http.R
 			userID, err)
 		http.Error(w, "Failed to get active rides", http.StatusInternalServerError)
 		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rides)
+}
+
+func (h *CarPoolRideHandler) RemoveParticipant(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	vars := mux.Vars(r)
+	rideID, err := uuid.Parse(vars["rideID"])
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid ride ID\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid ride ID", http.StatusBadRequest)
+		return
+	}
+
+	userID, err := uuid.Parse(vars["userID"])
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	err = h.carpoolRideRepo.RemoveParticipant(r.Context(), rideID, userID)
+	if err != nil {
+		if err.Error() == "ride not found" {
+			http.Error(w, "Ride not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove participant\",\"error\":\"%v\"}", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	carpoolIDStr := vars["id"]
+	dateStr := vars["date"]
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Received request\",\"carpool_id\":\"%s\",\"date\":\"%s\"}",
+		carpoolIDStr, dateStr)
+
+	carpoolID, err := uuid.Parse(carpoolIDStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+
+	// Parse the date string (expected format: "2025-05-05")
+	date, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid date format\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid date format. Use YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+
+	rides, err := h.carpoolRideRepo.GetCarpoolRidesByDate(r.Context(), carpoolID, date)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool rides\",\"error\":\"%v\"}", err)
+		if err == sql.ErrNoRows {
+			// Return empty array instead of null
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]models.CarpoolRide{})
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to get carpool rides: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// If no rides found, return empty array instead of null
+	if rides == nil {
+		rides = []models.CarpoolRide{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
