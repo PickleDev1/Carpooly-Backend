@@ -301,3 +301,23 @@ func (r *CarPoolRideRepository) GetCarpoolRidesByDate(ctx context.Context, carpo
 
 	return rides, nil
 }
+
+func (r *CarPoolRideRepository) UpdateCarpoolRideDriver(ctx context.Context, rideID uuid.UUID, driverID uuid.UUID) error {
+	query := `
+        UPDATE carpool_rides
+        SET driver_id = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING id
+    `
+
+	var returnedID uuid.UUID
+	err := r.db.QueryRowContext(ctx, query, rideID, driverID).Scan(&returnedID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("carpool ride not found")
+		}
+		return fmt.Errorf("failed to update carpool ride driver: %w", err)
+	}
+
+	return nil
+}

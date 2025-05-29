@@ -256,9 +256,6 @@ func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *htt
 	carpoolIDStr := vars["id"]
 	dateStr := vars["date"]
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Received request\",\"carpool_id\":\"%s\",\"date\":\"%s\"}",
-		carpoolIDStr, dateStr)
-
 	carpoolID, err := uuid.Parse(carpoolIDStr)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID\",\"error\":\"%v\"}", err)
@@ -294,4 +291,54 @@ func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *htt
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rides)
+}
+
+func (h *CarPoolRideHandler) UpdateCarpoolRideDriver(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	rideIDStr := vars["rideID"]
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Received update driver request\",\"ride_id\":\"%s\"}", rideIDStr)
+
+	rideID, err := uuid.Parse(rideIDStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid ride ID\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid ride ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		DriverID string `json:"driver_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid request body\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed request\",\"ride_id\":\"%s\",\"driver_id\":\"%s\"}",
+		rideID, req.DriverID)
+
+	driverID, err := uuid.Parse(req.DriverID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid driver ID\",\"error\":\"%v\"}", err)
+		http.Error(w, "Invalid driver ID", http.StatusBadRequest)
+		return
+	}
+
+	err = h.carpoolRideRepo.UpdateCarpoolRideDriver(r.Context(), rideID, driverID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update driver\",\"error\":\"%v\",\"ride_id\":\"%s\",\"driver_id\":\"%s\"}",
+			err, rideID, driverID)
+		if err.Error() == "carpool ride not found" {
+			http.Error(w, "Carpool ride not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to update carpool ride driver: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully updated driver\",\"ride_id\":\"%s\",\"driver_id\":\"%s\"}",
+		rideID, driverID)
+	w.WriteHeader(http.StatusOK)
 }
