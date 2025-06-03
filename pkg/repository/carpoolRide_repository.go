@@ -321,3 +321,28 @@ func (r *CarPoolRideRepository) UpdateCarpoolRideDriver(ctx context.Context, rid
 
 	return nil
 }
+
+func (r *CarPoolRideRepository) GetUserTotalRides(ctx context.Context, userID uuid.UUID) (int, error) {
+	query := `
+        SELECT COUNT(DISTINCT cr.id)
+        FROM carpool_rides cr
+        WHERE cr.participants @> json_build_array(
+            json_build_object(
+                'id', $1::uuid
+            )
+        )::jsonb
+        AND cr.start_time < NOW()  -- Only count rides that have passed
+        AND cr.status = 2  -- Only count completed rides
+    `
+
+	var totalRides int
+	err := r.db.QueryRowContext(ctx, query, userID).Scan(&totalRides)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get total rides\",\"error\":\"%v\"}", err)
+		return 0, fmt.Errorf("failed to get total rides: %v", err)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Retrieved total rides\",\"user_id\":\"%s\",\"total_rides\":%d,\"query_time\":\"%s\"}",
+		userID, totalRides, time.Now().Format(time.RFC3339))
+	return totalRides, nil
+}

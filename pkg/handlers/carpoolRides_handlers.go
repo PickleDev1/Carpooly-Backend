@@ -342,3 +342,67 @@ func (h *CarPoolRideHandler) UpdateCarpoolRideDriver(w http.ResponseWriter, r *h
 		rideID, driverID)
 	w.WriteHeader(http.StatusOK)
 }
+
+func (h *CarPoolRideHandler) GetUserTotalRides(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetUserTotalRides called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	vars := mux.Vars(r)
+	rawClerkID := vars["userID"]
+	if rawClerkID == "" {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Missing userID parameter\"}")
+		http.Error(w, "Missing userID parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Add "user_" prefix if it's missing
+	clerkID := rawClerkID
+	if !strings.HasPrefix(rawClerkID, "user_") {
+		clerkID = "user_" + rawClerkID
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Added user_ prefix to clerk ID\",\"raw_clerk_id\":\"%s\",\"clerk_id\":\"%s\"}",
+			rawClerkID, clerkID)
+	}
+
+	// Convert clerk_id to user_id
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
+			clerkID, err)
+		if err == sql.ErrNoRows {
+			http.Error(w, "User not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully converted clerk ID to user ID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}",
+		clerkID, userID)
+
+	totalRides, err := h.carpoolRideRepo.GetUserTotalRides(r.Context(), userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get total rides\",\"user_id\":\"%s\",\"error\":\"%v\"}",
+			userID, err)
+		http.Error(w, "Failed to get total rides", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully retrieved total rides\",\"user_id\":\"%s\",\"total_rides\":%d}",
+		userID, totalRides)
+
+	response := struct {
+		TotalRides int `json:"total_rides"`
+	}{
+		TotalRides: totalRides,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetUserTotalRides completed\",\"duration_ms\":%d,\"user_id\":\"%s\",\"total_rides\":%d}",
+		duration.Milliseconds(), userID, totalRides)
+}
