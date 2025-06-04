@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"car-backend/middleware"
 
@@ -102,27 +103,80 @@ func (h *CarPoolHandler) UpdateCarPool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CarPoolHandler) DeleteCarPool(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"DeleteCarPool called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
 	w.Header().Set("Content-Type", "application/json")
 
 	params := mux.Vars(r)
 	carpoolIDStr := params["id"]
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Attempting to delete carpool\",\"carpool_id\":\"%s\"}", carpoolIDStr)
 
 	carpoolID, err := uuid.Parse(carpoolIDStr)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolIDStr, err)
 		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
 		return
 	}
 
-	err = h.carpoolRepo.DeleteCarPool(context.Background(), carpoolID)
+	// First verify if the carpool exists and get its details
+	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Carpool not found\",\"carpool_id\":\"%s\"}", carpoolID)
 			http.Error(w, "Carpool not found", http.StatusNotFound)
 			return
 		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to verify carpool existence\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
+		http.Error(w, "Failed to verify carpool", http.StatusInternalServerError)
+		return
+	}
+
+	// Get user ID from context to verify ownership
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\",\"carpool_id\":\"%s\"}", carpoolID)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Convert clerk ID to user ID
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
+			clerkID, err)
+		http.Error(w, "Failed to verify user", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify that the user is the creator of the carpool
+	if carpool.CreatorID != userID {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"User not authorized to delete carpool\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"creator_id\":\"%s\"}",
+			carpoolID, userID, carpool.CreatorID)
+		http.Error(w, "Not authorized to delete this carpool", http.StatusForbidden)
+		return
+	}
+
+	// Delete the carpool
+	err = h.carpoolRepo.DeleteCarPool(r.Context(), carpoolID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Carpool not found during deletion\",\"carpool_id\":\"%s\"}", carpoolID)
+			http.Error(w, "Carpool not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to delete carpool\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
 		http.Error(w, fmt.Sprintf("Failed to delete carpool: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully deleted carpool\",\"carpool_id\":\"%s\",\"duration_ms\":%d}",
+		carpoolID, duration.Milliseconds())
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -108,34 +108,79 @@ func (r *CarPoolRepository) GetCarPool(ctx context.Context, carpoolID uuid.UUID)
 }
 
 func (r *CarPoolRepository) DeleteCarPool(ctx context.Context, carpoolID uuid.UUID) error {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Starting carpool deletion transaction\",\"carpool_id\":\"%s\"}", carpoolID)
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to begin transaction\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
 		return fmt.Errorf("failed to begin transaction: %v", err)
 	}
 	defer tx.Rollback()
 
-	// Delete the carpool (assuming carpool_stops table has ON DELETE CASCADE)
-	result, err := tx.ExecContext(ctx, `DELETE FROM carpools WHERE id = $1`, carpoolID)
+	// First delete all associated rides
+	deleteRidesQuery := `DELETE FROM carpool_rides WHERE carpool_id = $1`
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Deleting associated rides\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	_, err = tx.ExecContext(ctx, deleteRidesQuery, carpoolID)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to delete associated rides\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
+		return fmt.Errorf("failed to delete associated rides: %v", err)
+	}
+
+	// Delete all carpool members
+	deleteMembersQuery := `DELETE FROM carpool_members WHERE carpool_id = $1`
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Deleting carpool members\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	_, err = tx.ExecContext(ctx, deleteMembersQuery, carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to delete carpool members\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
+		return fmt.Errorf("failed to delete carpool members: %v", err)
+	}
+
+	// Delete all invites
+	deleteInvitesQuery := `DELETE FROM invites WHERE carpool_id = $1`
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Deleting carpool invites\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	_, err = tx.ExecContext(ctx, deleteInvitesQuery, carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to delete carpool invites\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
+		return fmt.Errorf("failed to delete carpool invites: %v", err)
+	}
+
+	// Finally delete the carpool
+	deleteCarpoolQuery := `DELETE FROM carpools WHERE id = $1`
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Deleting carpool\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	result, err := tx.ExecContext(ctx, deleteCarpoolQuery, carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to delete carpool\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
 		return fmt.Errorf("failed to delete carpool: %v", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get affected rows: %v", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get rows affected\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
+		return fmt.Errorf("failed to get rows affected: %v", err)
 	}
 
 	if rowsAffected == 0 {
-		return sql.ErrNoRows // No carpool found
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"No carpool found to delete\",\"carpool_id\":\"%s\"}", carpoolID)
+		return sql.ErrNoRows
 	}
 
-	// Log the operation
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Deleted carpool %s\"}", carpoolID)
-
 	if err = tx.Commit(); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to commit transaction\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			carpoolID, err)
 		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully deleted carpool and all associated data\",\"carpool_id\":\"%s\"}", carpoolID)
 	return nil
 }
 
