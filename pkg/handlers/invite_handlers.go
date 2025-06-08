@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"car-backend/middleware"
 	"car-backend/pkg/models"
 	"car-backend/pkg/repository"
 	"database/sql"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,55 +40,44 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Log the received request
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Received invite request\",\"from_user\":\"%s\",\"to_email\":\"%s\",\"carpool_id\":\"%s\"}",
-		invite.FromUser, invite.Email, invite.CarpoolID)
-
-	// Get sender's details
-	userID, err := uuid.Parse(invite.FromUser)
-	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID format\",\"id\":\"%s\",\"error\":\"%v\"}",
-			invite.FromUser, err)
-		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
+	// Get the logged-in user's ID from context
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	fromUser, err := h.userRepo.GetUserByID(userID)
+	// Convert clerk ID to user ID
+	fromUserID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get sender details\",\"user_id\":\"%s\",\"error\":\"%v\"}",
-			userID, err)
-		http.Error(w, "Failed to get sender details", http.StatusInternalServerError)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
+			clerkID, err)
+		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found sender details\",\"user_id\":\"%s\",\"name\":\"%s\"}",
-		fromUser.ID, fromUser.Name)
-
-	// Get carpool details
-	carpoolID := uuid.MustParse(invite.CarpoolID)
-	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
+	// Parse carpool ID
+	carpoolID, err := uuid.Parse(invite.CarpoolID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool details\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
-			carpoolID, err)
-		http.Error(w, "Failed to get carpool details", http.StatusInternalServerError)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
+			invite.CarpoolID, err)
+		http.Error(w, "Invalid carpool ID format", http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found carpool details\",\"carpool_id\":\"%s\",\"name\":\"%s\"}",
-		carpool.ID, carpool.CarpoolName)
 
 	// Create new invite
 	newInvite := &models.Invite{
 		ID:        uuid.New(),
 		CarpoolID: carpoolID,
-		FromUser:  fromUser.ID,
+		FromUser:  fromUserID,
 		ToUser:    invite.Email,
-		Message:   invite.Message,
 		Status:    models.InviteStatusPending,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
+	// Create the invite in the database
 	if err := h.inviteRepo.CreateInvite(r.Context(), newInvite); err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create invite\",\"invite_id\":\"%s\",\"error\":\"%v\"}",
 			newInvite.ID, err)
@@ -94,14 +85,8 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully created invite\",\"invite_id\":\"%s\"}",
-		newInvite.ID)
-
-	// Send email invitation
-	if err := h.sendInviteEmail(newInvite, fromUser, carpool); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to send invite email: %v\"}", err)
-		// Continue execution as the invite was created successfully
-	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully created invite\",\"invite_id\":\"%s\",\"from_user\":\"%s\",\"to_user\":\"%s\"}",
+		newInvite.ID, fromUserID, invite.Email)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -124,10 +109,6 @@ func (h *InviteHandler) sendInviteEmail(invite *models.Invite, fromUser *models.
 			<div style="padding: 20px; border: 1px solid #ddd; border-top: none;">
 				<p>Hello,</p>
 				<p>You've been invited by %s to join a carpool group: <strong>%s</strong></p>
-				<p>Message from %s:</p>
-				<blockquote style="border-left: 4px solid #4F46E5; margin: 0; padding-left: 20px;">
-					%s
-				</blockquote>
 				<div style="text-align: center; margin-top: 30px;">
 					<a href="https://carpooly-web.vercel.app/invites/%s" 
 					   style="background-color: #4F46E5; color: white; padding: 12px 24px; 
@@ -137,7 +118,7 @@ func (h *InviteHandler) sendInviteEmail(invite *models.Invite, fromUser *models.
 				</div>
 			</div>
 		</div>
-	`, fromUser.Name, carpool.CarpoolName, fromUser.Name, invite.Message, invite.ID)
+	`, fromUser.Name, carpool.CarpoolName, invite.ID)
 
 	params := &resend.SendEmailRequest{
 		From:    "Carpooly <invites@carpooly.app>",
@@ -236,6 +217,14 @@ func (h *InviteHandler) GetUserInvites(w http.ResponseWriter, r *http.Request) {
 func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	// Get clerk ID from context
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	inviteIDStr := vars["id"]
 
@@ -251,9 +240,92 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// If status is accepted (1), add user to carpool_members
+	// Get the invite to verify the user is the intended recipient
+	invite, err := h.inviteRepo.GetInvite(r.Context(), inviteID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get invite\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get invite", http.StatusInternalServerError)
+		return
+	}
+
+	// Get user details from clerk ID
+	user, err := h.userRepo.GetUserByClerkID(clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user details\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to get user details", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify this user is the intended recipient
+	if user.Email != invite.ToUser {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"User not authorized to update this invite\",\"user_email\":\"%s\",\"invite_email\":\"%s\"}",
+			user.Email, invite.ToUser)
+		http.Error(w, "Not authorized to update this invite", http.StatusForbidden)
+		return
+	}
+
 	if req.Status == models.InviteStatusAccepted {
-		err = h.inviteRepo.AcceptInvite(r.Context(), inviteID)
+		// Update invite status only
+		err = h.inviteRepo.UpdateInviteStatus(r.Context(), inviteID, req.Status)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update invite status\",\"error\":\"%v\"}", err)
+			http.Error(w, "Failed to update invite status", http.StatusInternalServerError)
+			return
+		}
+
+		carpoolID := invite.CarpoolID.String()
+		userID := user.ID.String()
+
+		// 1. Call add-to-carpool-members API
+		addToMembersURL := os.Getenv("CARPOOLY_API_URL") + "/api/carpools/" + carpoolID + "/members"
+		if addToMembersURL == "/api/carpools/"+carpoolID+"/members" {
+			addToMembersURL = "http://localhost:8080/api/carpools/" + carpoolID + "/members"
+		}
+		membersPayload := map[string]string{"user_id": userID}
+		membersJSON, _ := json.Marshal(membersPayload)
+		reqMembers, err := http.NewRequest("POST", addToMembersURL, strings.NewReader(string(membersJSON)))
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create HTTP request to add-to-carpool-members\",\"error\":\"%v\"}", err)
+			http.Error(w, "Failed to add user to carpool members", http.StatusInternalServerError)
+			return
+		}
+		reqMembers.Header.Set("Content-Type", "application/json")
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			reqMembers.Header.Set("Authorization", auth)
+		}
+		client := &http.Client{Timeout: 10 * time.Second}
+		respMembers, err := client.Do(reqMembers)
+		if err != nil || respMembers.StatusCode >= 300 {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to call add-to-carpool-members API\",\"status\":%d,\"error\":\"%v\"}", respMembers.StatusCode, err)
+			http.Error(w, "Failed to add user to carpool members", http.StatusInternalServerError)
+			return
+		}
+		defer respMembers.Body.Close()
+
+		// 2. Call add-to-future-rides API
+		addToRidesURL := os.Getenv("CARPOOLY_API_URL") + "/api/carpools/" + carpoolID + "/add-to-future-rides"
+		if addToRidesURL == "/api/carpools/"+carpoolID+"/add-to-future-rides" {
+			addToRidesURL = "http://localhost:8080/api/carpools/" + carpoolID + "/add-to-future-rides"
+		}
+		ridesPayload := map[string]string{"user_id": userID}
+		ridesJSON, _ := json.Marshal(ridesPayload)
+		reqRides, err := http.NewRequest("POST", addToRidesURL, strings.NewReader(string(ridesJSON)))
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create HTTP request to add-to-future-rides\",\"error\":\"%v\"}", err)
+			http.Error(w, "Failed to add user to rides", http.StatusInternalServerError)
+			return
+		}
+		reqRides.Header.Set("Content-Type", "application/json")
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			reqRides.Header.Set("Authorization", auth)
+		}
+		respRides, err := client.Do(reqRides)
+		if err != nil || respRides.StatusCode >= 300 {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to call add-to-future-rides API\",\"status\":%d,\"error\":\"%v\"}", respRides.StatusCode, err)
+			http.Error(w, "Failed to add user to rides", http.StatusInternalServerError)
+			return
+		}
+		defer respRides.Body.Close()
 	} else {
 		err = h.inviteRepo.UpdateInviteStatus(r.Context(), inviteID, req.Status)
 	}

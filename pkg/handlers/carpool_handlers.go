@@ -268,3 +268,57 @@ func (h *CarPoolHandler) GetCarpoolMembers(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(members)
 }
+
+// AddCarpoolMemberAPI handles adding a user to carpool_members
+func (h *CarPoolHandler) AddCarpoolMemberAPI(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	carpoolIDStr := vars["carpoolID"]
+	carpoolID, err := uuid.Parse(carpoolIDStr)
+	if err != nil {
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+	var req models.AddCarpoolMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	userID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+	err = h.carpoolRepo.AddCarpoolMemberByAPI(r.Context(), carpoolID, userID)
+	if err != nil {
+		http.Error(w, "Failed to add member", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AddUserToFutureRidesAPI handles adding a user to all future rides' participants
+func (h *CarPoolHandler) AddUserToFutureRidesAPI(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	carpoolIDStr := vars["carpoolID"]
+	carpoolID, err := uuid.Parse(carpoolIDStr)
+	if err != nil {
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+	var req models.AddCarpoolMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	userID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+	err = h.carpoolRepo.AddUserToFutureRides(r.Context(), carpoolID, userID)
+	if err != nil {
+		http.Error(w, "Failed to add user to future rides", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

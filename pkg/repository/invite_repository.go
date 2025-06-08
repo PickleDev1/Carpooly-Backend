@@ -4,8 +4,10 @@ import (
 	"car-backend/pkg/models"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -31,14 +33,14 @@ func (r *InviteRepository) CreateInvite(ctx context.Context, invite *models.Invi
 
 	query := `
             INSERT INTO invites (
-                    from_user, to_user_email, carpool_id, message, status
-            ) VALUES ($1, $2, $3, $4, $5)
+                    from_user, to_user_email, carpool_id, status
+            ) VALUES ($1, $2, $3, $4)
             RETURNING id, created_at, updated_at
     `
 
 	err = tx.QueryRowContext(
 		ctx, query,
-		invite.FromUser, invite.ToUser, invite.CarpoolID, invite.Message, invite.Status,
+		invite.FromUser, invite.ToUser, invite.CarpoolID, invite.Status,
 	).Scan(&invite.ID, &invite.CreatedAt, &invite.UpdatedAt)
 
 	if err != nil {
@@ -57,7 +59,7 @@ func (r *InviteRepository) GetInvite(ctx context.Context, inviteID uuid.UUID) (*
 
 	invite := &models.Invite{}
 	query := `
-        SELECT id, from_user, to_user_email, carpool_id, message, status, created_at, updated_at
+        SELECT id, from_user, to_user_email, carpool_id, status, created_at, updated_at
         FROM invites
         WHERE id = $1
     `
@@ -70,7 +72,6 @@ func (r *InviteRepository) GetInvite(ctx context.Context, inviteID uuid.UUID) (*
 		&invite.FromUser,
 		&invite.ToUser,
 		&invite.CarpoolID,
-		&invite.Message,
 		&invite.Status,
 		&invite.CreatedAt,
 		&invite.UpdatedAt,
@@ -133,7 +134,6 @@ func (r *InviteRepository) GetUserInvites(ctx context.Context, email string) ([]
             i.carpool_id,
             i.from_user,
             i.to_user_email,
-            i.message,
             i.status,
             i.created_at,
             i.updated_at,
@@ -164,7 +164,6 @@ func (r *InviteRepository) GetUserInvites(ctx context.Context, email string) ([]
 			&invite.CarpoolID,
 			&invite.FromUser,
 			&invite.ToUser,
-			&invite.Message,
 			&invite.Status,
 			&invite.CreatedAt,
 			&invite.UpdatedAt,
@@ -213,53 +212,113 @@ func (r *InviteRepository) UpdateInviteStatus(ctx context.Context, inviteID uuid
 func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %v", err)
+		return err
 	}
 	defer tx.Rollback()
 
-	// Get the invite details
-	var invite models.Invite
-	query := `
-        SELECT carpool_id, to_user_email
-        FROM invites
-        WHERE id = $1
-    `
-	err = tx.QueryRowContext(ctx, query, inviteID).Scan(&invite.CarpoolID, &invite.ToUser)
+	// 1. Update invite status
+	_, err = tx.ExecContext(ctx, `UPDATE invites SET status = 1 WHERE id = $1`, inviteID)
 	if err != nil {
-		return fmt.Errorf("failed to get invite: %v", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update invite status\",\"error\":\"%v\"}", err)
+		tx.Rollback()
+		return err
 	}
 
-	// Get user ID from email
-	var userID uuid.UUID
-	userQuery := `
-        SELECT id
-        FROM users
-        WHERE email = $1
-    `
-	err = tx.QueryRowContext(ctx, userQuery, invite.ToUser).Scan(&userID)
+	// 2. Get invite details
+	var carpoolID uuid.UUID
+	var toUserEmail string
+	err = tx.QueryRowContext(ctx, `SELECT carpool_id, to_user_email FROM invites WHERE id = $1`, inviteID).Scan(&carpoolID, &toUserEmail)
 	if err != nil {
-		return fmt.Errorf("failed to get user ID: %v", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get invite details\",\"error\":\"%v\"}", err)
+		tx.Rollback()
+		return err
 	}
 
-	// Add member and update rides
-	if err := r.carpoolRepo.AddCarpoolMember(ctx, invite.CarpoolID, userID); err != nil {
-		return fmt.Errorf("failed to add member and update rides: %v", err)
-	}
-
-	// Update invite status to accepted
-	updateQuery := `
-        UPDATE invites
-        SET status = $1, updated_at = NOW()
-        WHERE id = $2
-    `
-	_, err = tx.ExecContext(ctx, updateQuery, models.InviteStatusAccepted, inviteID)
+	// 3. Get user by email
+	var user models.User
+	err = tx.QueryRowContext(ctx, `SELECT id, clerk_id, email, name, display_name, city, state, created_at, updated_at FROM users WHERE email = $1`, toUserEmail).Scan(
+		&user.ID, &user.ClerkID, &user.Email, &user.Name, &user.DisplayName, &user.City, &user.State, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("failed to update invite status: %v", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user by email\",\"error\":\"%v\"}", err)
+		tx.Rollback()
+		return err
 	}
 
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %v", err)
+	// 4. Add to carpool_members
+	_, err = tx.ExecContext(ctx, `INSERT INTO carpool_members (id, carpool_id, user_id, created_at, updated_at) VALUES (gen_random_uuid(), $1, $2, NOW(), NOW()) ON CONFLICT (carpool_id, user_id) DO NOTHING`, carpoolID, user.ID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to insert into carpool_members\",\"error\":\"%v\"}", err)
+		tx.Rollback()
+		return err
 	}
 
+	// 5. For each future ride, update participants in Go
+	rows, err := tx.QueryContext(ctx, `SELECT id, participants, start_time FROM carpool_rides WHERE carpool_id = $1`, carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to select carpool rides\",\"error\":\"%v\"}", err)
+		tx.Rollback()
+		return err
+	}
+	defer rows.Close()
+	now := time.Now()
+	for rows.Next() {
+		var rideID uuid.UUID
+		var participantsJSON []byte
+		var startTime time.Time
+		if err := rows.Scan(&rideID, &participantsJSON, &startTime); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan ride row\",\"ride_id\":\"%v\",\"error\":\"%v\"}", rideID, err)
+			tx.Rollback()
+			return err
+		}
+		if startTime.Before(now) {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Skipping past ride\",\"ride_id\":\"%v\",\"start_time\":\"%v\"}", rideID, startTime)
+			continue
+		}
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Processing ride for participant update\",\"ride_id\":\"%v\",\"user_id\":\"%v\"}", rideID, user.ID)
+		var participants []models.User
+		if len(participantsJSON) > 0 {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Unmarshalling participants JSON\",\"ride_id\":\"%v\",\"json\":%s}", rideID, string(participantsJSON))
+			if err := json.Unmarshal(participantsJSON, &participants); err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to unmarshal participants JSON\",\"ride_id\":\"%v\",\"error\":\"%v\"}", rideID, err)
+				tx.Rollback()
+				return err
+			}
+		}
+		// Check if user already in participants
+		alreadyIn := false
+		for _, p := range participants {
+			if p.ID == user.ID {
+				alreadyIn = true
+				break
+			}
+		}
+		if !alreadyIn {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Adding user to participants\",\"ride_id\":\"%v\",\"user_id\":\"%v\",\"before_count\":%d}", rideID, user.ID, len(participants))
+			participants = append(participants, user)
+			updatedJSON, err := json.Marshal(participants)
+			if err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to marshal updated participants\",\"ride_id\":\"%v\",\"error\":\"%v\"}", rideID, err)
+				tx.Rollback()
+				return err
+			}
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Updating ride participants in DB\",\"ride_id\":\"%v\",\"user_id\":\"%v\",\"after_count\":%d,\"json\":%s}", rideID, user.ID, len(participants), string(updatedJSON))
+			_, err = tx.ExecContext(ctx,
+				"UPDATE carpool_rides SET participants = $1, updated_at = NOW() WHERE id = $2",
+				updatedJSON, rideID,
+			)
+			if err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update ride participants in DB\",\"ride_id\":\"%v\",\"error\":\"%+v\"}", rideID, err)
+				tx.Rollback()
+				return err
+			}
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully added user to ride participants\",\"ride_id\":\"%v\",\"user_id\":\"%v\"}", rideID, user.ID)
+		} else {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"User already in participants\",\"ride_id\":\"%v\",\"user_id\":\"%v\"}", rideID, user.ID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	return nil
 }

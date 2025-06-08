@@ -104,3 +104,9 @@ type CreateCarPoolMemberRequest struct {
 	CarpoolID uuid.UUID `json:"carpool_id"`
 	UserID    uuid.UUID `json:"user_id"`
 }
+
+// AddCarpoolMemberRequest represents the request structure for adding a member to a carpool via API
+// Used for both add-to-members and add-to-future-rides endpoints
+type AddCarpoolMemberRequest struct {
+	UserID string `json:"user_id"`
+}

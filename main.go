@@ -19,8 +19,8 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	clerkhttp "github.com/clerk/clerk-sdk-go/v2/http"
 	"github.com/gorilla/mux"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 	"github.com/rs/cors"
 )
 
@@ -87,7 +87,7 @@ func setupDatabase() *sql.DB {
 			os.Getenv("DB_PASSWORD"),
 			os.Getenv("DB_NAME"),
 		)
-		db, err = sql.Open("postgres", dbURI)
+		db, err = sql.Open("pgx", dbURI)
 	} else {
 		// Cloud SQL connection using unix socket
 		dbURI := fmt.Sprintf("host=/cloudsql/%s user=%s password=%s dbname=%s",
@@ -98,7 +98,7 @@ func setupDatabase() *sql.DB {
 		)
 
 		debugLog("Attempting to connect to Cloud SQL with connection name: %s", dbURI)
-		db, err = sql.Open("postgres", dbURI)
+		db, err = sql.Open("pgx", dbURI)
 	}
 
 	if err != nil {
@@ -190,17 +190,17 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 
 	protected.HandleFunc("/carpools", carpoolHandler.CreateCarPool).Methods("POST")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.GetCarPool).Methods("GET")
-	r.HandleFunc("/carpools/{carpoolID}/members", carpoolHandler.GetCarpoolMembers).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/carpools/{carpoolID}/members", carpoolHandler.GetCarpoolMembers).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.UpdateCarPool).Methods("PUT")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.DeleteCarPool).Methods("DELETE")
 	protected.HandleFunc("/carpools/search", carpoolHandler.SearchCarPools).Methods("POST")
 
-	r.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
+	protected.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
 	protected.HandleFunc("/carpools/rides/{rideID}/updateStatus", carpoolRideHandler.UpdateCarpoolRideStatus).Methods("PUT")
 	r.HandleFunc("/carpools/rides/{rideID}/driver", carpoolRideHandler.UpdateCarpoolRideDriver).Methods("PUT", "OPTIONS")
 	r.HandleFunc("/users/{userID}/rides/total", carpoolRideHandler.GetUserTotalRides).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/carpools/{id}/rides/{rideID}", carpoolRideHandler.GetCarpoolRide).Methods("GET")
-	r.HandleFunc("/carpools/{id}/rides/{date}", carpoolRideHandler.GetCarpoolRidesByDate).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/carpools/{id}/rides/{date}", carpoolRideHandler.GetCarpoolRidesByDate).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/carpools/creator/{creatorID}", carpoolHandler.GetCreatorCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/users/{userID}", carpoolHandler.GetUserCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/{carpoolID}/rides/{rideID}", carpoolRideHandler.DeleteCarpoolRide).Methods("DELETE")
@@ -221,6 +221,9 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	//users := api.PathPrefix("/users").Subrouter()
 	protected.HandleFunc("/users/me", userHandler.GetCurrentUser).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/active-ride/user_{userID}", carpoolRideHandler.GetUserActiveRides).Methods("GET", "OPTIONS")
+
+	protected.HandleFunc("/carpools/{carpoolID}/members", carpoolHandler.AddCarpoolMemberAPI).Methods("POST")
+	protected.HandleFunc("/carpools/{carpoolID}/add-to-future-rides", carpoolHandler.AddUserToFutureRidesAPI).Methods("POST")
 
 	return r
 }

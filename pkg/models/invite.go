@@ -12,7 +12,6 @@ type Invite struct {
 	FromUser    uuid.UUID `json:"from_user" db:"from_user"`
 	ToUser      string    `json:"to_user" db:"to_user"`
 	CarpoolID   uuid.UUID `json:"carpool_id" db:"carpool_id"`
-	Message     string    `json:"message" db:"message"`
 	Status      int       `json:"status" db:"status"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
@@ -25,7 +24,6 @@ type CreateInviteRequest struct {
 	CarpoolID string `json:"carpool_id"`
 	FromUser  string `json:"from_user"`
 	Email     string `json:"email"`
-	Message   string `json:"message"`
 }
 
 // UpdateInviteRequest represents the request structure for updating an invitation status

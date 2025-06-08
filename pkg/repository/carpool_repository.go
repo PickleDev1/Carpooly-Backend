@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -309,97 +310,70 @@ func (r *CarPoolRepository) GetCarpoolMembers(ctx context.Context, carpoolID uui
 	return members, nil
 }
 
-func (r *CarPoolRepository) AddCarpoolMember(ctx context.Context, carpoolID, userID uuid.UUID) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %v", err)
-	}
-	defer tx.Rollback()
+// AddCarpoolMemberByAPI adds a user to carpool_members
+func (r *CarPoolRepository) AddCarpoolMemberByAPI(ctx context.Context, carpoolID, userID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `
+        INSERT INTO carpool_members (carpool_id, user_id, created_at, updated_at)
+        VALUES ($1, $2, NOW(), NOW())
+        ON CONFLICT (carpool_id, user_id) DO NOTHING
+    `, carpoolID, userID)
+	return err
+}
 
-	// First add the member to carpool_members
-	memberQuery := `
-        INSERT INTO carpool_members (id, carpool_id, user_id, created_at, updated_at)
-        VALUES (gen_random_uuid(), $1, $2, NOW(), NOW())
-    `
-	_, err = tx.ExecContext(ctx, memberQuery, carpoolID, userID)
+// AddUserToFutureRides adds a user to all future rides' participants
+func (r *CarPoolRepository) AddUserToFutureRides(ctx context.Context, carpoolID, userID uuid.UUID) error {
+	// Get user details
+	var user models.User
+	err := r.db.QueryRowContext(ctx, `
+        SELECT id, clerk_id, email, name, display_name, city, state, created_at, updated_at
+        FROM users WHERE id = $1
+    `, userID).Scan(
+		&user.ID, &user.ClerkID, &user.Email, &user.Name, &user.DisplayName, &user.City, &user.State, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("failed to add carpool member: %v", err)
+		return err
 	}
-
-	// Get all rides (both past and future) for this carpool
-	ridesQuery := `
-        SELECT id, participants 
-        FROM carpool_rides 
-        WHERE carpool_id = $1
-    `
-	rows, err := tx.QueryContext(ctx, ridesQuery, carpoolID)
+	// Get all future rides
+	rows, err := r.db.QueryContext(ctx, `SELECT id, participants, start_time FROM carpool_rides WHERE carpool_id = $1`, carpoolID)
 	if err != nil {
-		return fmt.Errorf("failed to get carpool rides: %v", err)
+		return err
 	}
 	defer rows.Close()
-
-	// Get the user details to add to participants
-	var user models.User
-	userQuery := `
-        SELECT id, clerk_id, email, name, display_name, city, state, created_at, updated_at
-        FROM users
-        WHERE id = $1
-    `
-	err = tx.QueryRowContext(ctx, userQuery, userID).Scan(
-		&user.ID,
-		&user.ClerkID,
-		&user.Email,
-		&user.Name,
-		&user.DisplayName,
-		&user.City,
-		&user.State,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to get user details: %v", err)
-	}
-
-	// Update each ride's participants
+	now := time.Now()
 	for rows.Next() {
 		var rideID uuid.UUID
 		var participantsJSON []byte
-		err := rows.Scan(&rideID, &participantsJSON)
-		if err != nil {
-			return fmt.Errorf("failed to scan ride: %v", err)
+		var startTime time.Time
+		if err := rows.Scan(&rideID, &participantsJSON, &startTime); err != nil {
+			return err
 		}
-
+		if startTime.Before(now) {
+			continue
+		}
 		var participants []models.User
-		err = json.Unmarshal(participantsJSON, &participants)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal participants: %v", err)
+		if len(participantsJSON) > 0 {
+			if err := json.Unmarshal(participantsJSON, &participants); err != nil {
+				return err
+			}
 		}
-
-		// Add the new user to participants
-		participants = append(participants, user)
-
-		// Marshal updated participants back to JSON
-		updatedParticipantsJSON, err := json.Marshal(participants)
-		if err != nil {
-			return fmt.Errorf("failed to marshal updated participants: %v", err)
+		alreadyIn := false
+		for _, p := range participants {
+			if p.ID == user.ID {
+				alreadyIn = true
+				break
+			}
 		}
-
-		// Update the ride
-		updateQuery := `
-            UPDATE carpool_rides 
-            SET participants = $1, updated_at = NOW()
-            WHERE id = $2
-        `
-		_, err = tx.ExecContext(ctx, updateQuery, updatedParticipantsJSON, rideID)
-		if err != nil {
-			return fmt.Errorf("failed to update ride participants: %v", err)
+		if !alreadyIn {
+			participants = append(participants, user)
+			updatedJSON, err := json.Marshal(participants)
+			if err != nil {
+				return err
+			}
+			_, err = r.db.ExecContext(ctx, `UPDATE carpool_rides SET participants = $1, updated_at = NOW() WHERE id = $2`, updatedJSON, rideID)
+			if err != nil {
+				return err
+			}
 		}
 	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %v", err)
-	}
-
 	return nil
 }
 
