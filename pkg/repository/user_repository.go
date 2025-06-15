@@ -24,21 +24,24 @@ func (r *UserRepository) CreateUser(ctx context.Context, user *models.User) erro
 		user.ID = uuid.New()
 	}
 
-	// Use INSERT ... SELECT to achieve "upsert" functionality
 	query := `
-        INSERT INTO users (id, email, name, display_name, city, state, clerk_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO users (id, email, name, display_name, city, state, clerk_id, location_sharing_enabled, home_latitude, home_longitude)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (email) DO UPDATE SET
             name = EXCLUDED.name,
             display_name = EXCLUDED.display_name,
             city = EXCLUDED.city,
             state = EXCLUDED.state,
             clerk_id = EXCLUDED.clerk_id,
+            location_sharing_enabled = EXCLUDED.location_sharing_enabled,
+            home_latitude = EXCLUDED.home_latitude,
+            home_longitude = EXCLUDED.home_longitude,
             updated_at = NOW()
     `
 
 	_, err := r.db.ExecContext(ctx, query,
 		user.ID, user.Email, user.Name, user.DisplayName, user.City, user.State, user.ClerkID,
+		user.LocationSharingEnabled, user.HomeLatitude, user.HomeLongitude,
 	)
 	return err
 }
@@ -50,13 +53,19 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, userID string, updat
             display_name = COALESCE($1, display_name),
             city = COALESCE($2, city),
             state = COALESCE($3, state),
+            location_sharing_enabled = COALESCE($4, location_sharing_enabled),
+            home_latitude = COALESCE($5, home_latitude),
+            home_longitude = COALESCE($6, home_longitude),
             updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
+        WHERE id = $7
     `
 	_, err := r.db.ExecContext(ctx, query,
 		update.DisplayName,
 		update.City,
 		update.State,
+		update.LocationSharingEnabled,
+		update.HomeLatitude,
+		update.HomeLongitude,
 		userID,
 	)
 	return err
@@ -74,6 +83,10 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*models.User, 
 		&user.State,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.ClerkID,
+		&user.LocationSharingEnabled,
+		&user.HomeLatitude,
+		&user.HomeLongitude,
 	)
 	if err != nil {
 		return nil, err
@@ -98,11 +111,10 @@ func (r *UserRepository) CreateUserIfNotExists(ctx context.Context, user *models
 		return nil
 	}
 
-	// User doesn't exist, create new user
 	query := `
         INSERT INTO users (
-            id, email, name, display_name, city, state
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+            id, email, name, display_name, city, state, location_sharing_enabled, home_latitude, home_longitude
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING created_at, updated_at`
 
 	err = r.db.QueryRowContext(ctx, query,
@@ -112,6 +124,9 @@ func (r *UserRepository) CreateUserIfNotExists(ctx context.Context, user *models
 		user.DisplayName,
 		user.City,
 		user.State,
+		user.LocationSharingEnabled,
+		user.HomeLatitude,
+		user.HomeLongitude,
 	).Scan(&user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
@@ -148,7 +163,7 @@ func (r *UserRepository) GetUserByClerkID(clerkID string) (*models.User, error) 
 
 	var user models.User
 	query := `
-        SELECT id, clerk_id, email, name, display_name, city, state, created_at, updated_at
+        SELECT id, clerk_id, email, name, display_name, city, state, location_sharing_enabled, home_latitude, home_longitude, created_at, updated_at
         FROM users
         WHERE clerk_id = $1
     `
@@ -161,6 +176,9 @@ func (r *UserRepository) GetUserByClerkID(clerkID string) (*models.User, error) 
 		&user.DisplayName,
 		&user.City,
 		&user.State,
+		&user.LocationSharingEnabled,
+		&user.HomeLatitude,
+		&user.HomeLongitude,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)
@@ -183,7 +201,7 @@ func (r *UserRepository) GetUserByClerkID(clerkID string) (*models.User, error) 
 func (r *UserRepository) GetUserByID(id uuid.UUID) (*models.User, error) {
 	var user models.User
 	query := `
-        SELECT id, clerk_id, email, name, display_name, city, state, created_at, updated_at
+        SELECT id, clerk_id, email, name, display_name, city, state, location_sharing_enabled, home_latitude, home_longitude, created_at, updated_at
         FROM users
         WHERE id = $1
     `
@@ -195,6 +213,9 @@ func (r *UserRepository) GetUserByID(id uuid.UUID) (*models.User, error) {
 		&user.DisplayName,
 		&user.City,
 		&user.State,
+		&user.LocationSharingEnabled,
+		&user.HomeLatitude,
+		&user.HomeLongitude,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)

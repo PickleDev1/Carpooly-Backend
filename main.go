@@ -138,7 +138,7 @@ func setupClerk() {
 	clerk.SetKey(clerkSecretKey)
 }
 
-func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler, scheduleHandler *handlers.CarpoolScheduleHandler) *mux.Router {
+func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler, scheduleHandler *handlers.CarpoolScheduleHandler, locationHandler *handlers.LocationHandler) *mux.Router {
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Setting up router\"}")
 
 	r := mux.NewRouter()
@@ -225,6 +225,14 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/carpools/{carpoolID}/members", carpoolHandler.AddCarpoolMemberAPI).Methods("POST")
 	protected.HandleFunc("/carpools/{carpoolID}/add-to-future-rides", carpoolHandler.AddUserToFutureRidesAPI).Methods("POST")
 
+	protected.HandleFunc("/location/update/{rideID}", locationHandler.UpdateLocation).Methods("POST")
+	protected.HandleFunc("/location/latest/{userID}/{rideID}", locationHandler.GetLatestLocation).Methods("GET")
+	protected.HandleFunc("/location/history/{userID}/{rideID}", locationHandler.GetLocationHistory).Methods("GET")
+	protected.HandleFunc("/location/settings", locationHandler.UpdateLocationSettings).Methods("PUT")
+	protected.HandleFunc("/location/settings", locationHandler.GetLocationSettings).Methods("GET")
+
+	protected.HandleFunc("/users/{id}", userHandler.GetUserByID).Methods("GET")
+
 	return r
 }
 
@@ -288,6 +296,7 @@ func main() {
 	inviteRepo := repository.NewInviteRepository(db)
 	carpoolRideRepo := repository.NewCarPoolRideRepository(db)
 	scheduleRepo := repository.NewCarpoolScheduleRepository(db)
+	locationRepo := repository.NewLocationRepository(db)
 
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(userRepo)
@@ -296,8 +305,9 @@ func main() {
 	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo, userRepo, carpoolRepo)
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
 	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo)
+	locationHandler := handlers.NewLocationHandler(locationRepo, userRepo)
 
-	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler)
+	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler, locationHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
