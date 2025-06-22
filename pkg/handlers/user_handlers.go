@@ -54,10 +54,18 @@ func (h *UserHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Authenticated user\",\"clerk_id\":\"%s\"}", claims.Subject)
 
-	// Get user from our database
-	user, err := h.userRepo.GetByID(ctx, claims.Subject)
+	// Convert Clerk ID to user UUID
+	userID, err := h.userRepo.GetUserIDByClerkID(ctx, claims.Subject)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user profile\",\"clerk_id\":\"%s\",\"error\":%q}", claims.Subject, err.Error())
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user UUID from Clerk ID\",\"clerk_id\":\"%s\",\"error\":%q}", claims.Subject, err.Error())
+		http.Error(w, "Failed to get user profile", http.StatusInternalServerError)
+		return
+	}
+
+	// Get user from our database using UUID
+	user, err := h.userRepo.GetByID(ctx, userID.String())
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user profile\",\"user_id\":\"%s\",\"error\":%q}", userID.String(), err.Error())
 		http.Error(w, "Failed to get user profile", http.StatusInternalServerError)
 		return
 	}

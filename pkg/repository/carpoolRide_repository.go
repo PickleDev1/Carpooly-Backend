@@ -28,6 +28,8 @@ func (r *CarPoolRideRepository) CreateCarpoolRide(ctx context.Context, ride *mod
 	defer tx.Rollback()
 
 	log.Printf("Creating carpool ride for carpoolID: %s", ride.CarpoolID)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Creating carpool ride\",\"carpool_id\":\"%s\",\"start_time\":\"%s\",\"start_time_zero\":%v}",
+		ride.CarpoolID, ride.StartTime.Format(time.RFC3339), ride.StartTime.IsZero())
 
 	// Convert participants to JSON
 	participantsJSON, err := json.Marshal(ride.Participants)
@@ -53,10 +55,10 @@ func (r *CarPoolRideRepository) CreateCarpoolRide(ctx context.Context, ride *mod
 	}
 
 	// Set default values for the returned ride object
-	ride.DriverID = uuid.Nil
-	ride.LocationLat = 0
-	ride.LocationLng = 0
-	ride.MilesSaved = 0
+	ride.DriverID = nil // Set to nil since it's optional
+	ride.LocationLat = nil
+	ride.LocationLng = nil
+	ride.MilesSaved = nil
 	ride.Status = 0 // Default status
 
 	log.Printf("Carpool ride created successfully: %v", ride.ID)
@@ -273,16 +275,17 @@ func (r *CarPoolRideRepository) GetCarpoolRidesByDate(ctx context.Context, carpo
 
 		// Convert NULL values to zero values
 		if locationLat.Valid {
-			ride.LocationLat = locationLat.Float64
+			ride.LocationLat = &locationLat.Float64
 		}
 		if locationLng.Valid {
-			ride.LocationLng = locationLng.Float64
+			ride.LocationLng = &locationLng.Float64
 		}
 		if milesSaved.Valid {
-			ride.MilesSaved = milesSaved.Float64
+			ride.MilesSaved = &milesSaved.Float64
 		}
 		if driverID.Valid {
-			ride.DriverID, _ = uuid.Parse(driverID.String)
+			parsedDriverID, _ := uuid.Parse(driverID.String)
+			ride.DriverID = &parsedDriverID
 		}
 
 		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
@@ -345,4 +348,137 @@ func (r *CarPoolRideRepository) GetUserTotalRides(ctx context.Context, userID uu
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Retrieved total rides\",\"user_id\":\"%s\",\"total_rides\":%d,\"query_time\":\"%s\"}",
 		userID, totalRides, time.Now().Format(time.RFC3339))
 	return totalRides, nil
+}
+
+func (r *CarPoolRideRepository) GetActiveRides(ctx context.Context, userID uuid.UUID, timezoneStr string) ([]models.CarpoolRide, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetActiveRides called\",\"user_id\":\"%s\",\"timezone\":\"%s\"}", userID, timezoneStr)
+
+	// Parse timezone
+	loc, err := time.LoadLocation(timezoneStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"Invalid timezone, using UTC\",\"timezone\":\"%s\",\"error\":\"%v\"}", timezoneStr, err)
+		loc = time.UTC
+		timezoneStr = "UTC"
+	}
+
+	// Get current time in user's timezone
+	now := time.Now().In(loc)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Current time in user timezone\",\"timezone\":\"%s\",\"now\":\"%s\"}", timezoneStr, now.Format(time.RFC3339))
+
+	// Calculate the start and end of the user's current day in their timezone
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	// Convert to UTC for database query
+	startOfDayUTC := startOfDay.UTC()
+	endOfDayUTC := endOfDay.UTC()
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User's day boundaries in UTC\",\"start_of_day_utc\":\"%s\",\"end_of_day_utc\":\"%s\"}",
+		startOfDayUTC.Format(time.RFC3339), endOfDayUTC.Format(time.RFC3339))
+
+	// Query to get active rides - include rides that are within the user's current day
+	// Include rides that:
+	// 1. Have a start_time within the user's current day (in their timezone)
+	// 2. Have NULL start_time but were created recently (within last 24 hours)
+	// 3. Are ongoing rides (started within the last 8 hours)
+	query := `
+		SELECT cr.id, cr.carpool_id, cr.driver_id, cr.start_time, cr.status, 
+		       cr.location_lat, cr.location_lng, cr.miles_saved, cr.participants, 
+		       cr.created_at, cr.updated_at
+		FROM carpool_rides cr
+		JOIN carpools c ON cr.carpool_id = c.id
+		JOIN carpool_members cm ON c.id = cm.carpool_id
+		WHERE cm.user_id = $1
+		AND (
+			(cr.start_time IS NULL AND cr.created_at >= NOW() - INTERVAL '24 hours')
+			OR (
+				cr.start_time >= $2::timestamp with time zone
+				AND cr.start_time < $3::timestamp with time zone
+			)
+			OR (
+				cr.start_time >= NOW() - INTERVAL '8 hours'
+				AND cr.start_time <= NOW()
+			)
+		)
+		ORDER BY cr.start_time ASC NULLS LAST, cr.created_at DESC
+	`
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing GetActiveRides query\",\"user_id\":\"%s\",\"timezone\":\"%s\",\"start_of_day\":\"%s\",\"end_of_day\":\"%s\"}",
+		userID, timezoneStr, startOfDayUTC.Format(time.RFC3339), endOfDayUTC.Format(time.RFC3339))
+
+	rows, err := r.db.QueryContext(ctx, query, userID, startOfDayUTC, endOfDayUTC)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetActiveRides query failed\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return nil, fmt.Errorf("failed to query active rides: %w", err)
+	}
+	defer rows.Close()
+
+	var rides []models.CarpoolRide
+	for rows.Next() {
+		var ride models.CarpoolRide
+		var participantsJSON []byte
+		var locationLat, locationLng, milesSaved sql.NullFloat64
+		var driverID sql.NullString
+		var startTime sql.NullTime
+
+		err := rows.Scan(
+			&ride.ID,
+			&ride.CarpoolID,
+			&driverID,
+			&startTime,
+			&ride.Status,
+			&locationLat,
+			&locationLng,
+			&milesSaved,
+			&participantsJSON,
+			&ride.CreatedAt,
+			&ride.UpdatedAt,
+		)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetActiveRides scan failed\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to scan ride: %v", err)
+		}
+
+		// Handle NULL start_time
+		if startTime.Valid {
+			ride.StartTime = startTime.Time
+		} else {
+			// If start_time is NULL, use created_at as a fallback
+			ride.StartTime = ride.CreatedAt
+		}
+
+		// Convert NULL values to zero values
+		if locationLat.Valid {
+			ride.LocationLat = &locationLat.Float64
+		}
+		if locationLng.Valid {
+			ride.LocationLng = &locationLng.Float64
+		}
+		if milesSaved.Valid {
+			ride.MilesSaved = &milesSaved.Float64
+		}
+		if driverID.Valid {
+			parsedDriverID, _ := uuid.Parse(driverID.String)
+			ride.DriverID = &parsedDriverID
+		}
+
+		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"JSON unmarshal failed\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to unmarshal participants: %w", err)
+		}
+
+		// Log each ride found for debugging
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found active ride\",\"ride_id\":\"%s\",\"start_time\":\"%s\",\"status\":%d}",
+			ride.ID, ride.StartTime.Format(time.RFC3339), ride.Status)
+
+		rides = append(rides, ride)
+	}
+
+	if err = rows.Err(); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetActiveRides rows error\",\"error\":\"%v\"}", err)
+		return nil, fmt.Errorf("error during rows iteration: %w", err)
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetActiveRides found rides\",\"user_id\":\"%s\",\"timezone\":\"%s\",\"ride_count\":%d}", userID, timezoneStr, len(rides))
+	return rides, nil
 }

@@ -13,3 +13,11 @@ CREATE TABLE carpool_schedules (
 );
 
 ALTER TABLE carpool_schedules DROP COLUMN repeat_interval;
+
+-- Fix start_time column type in carpool_schedules table
+-- Change from TIME to TIMESTAMP to match Go time.Time type
+-- Use start_date as the base date for the time conversion
+
+ALTER TABLE carpool_schedules 
+ALTER COLUMN start_time TYPE TIMESTAMP WITH TIME ZONE 
+USING (start_date + start_time)::timestamp with time zone; 

@@ -24,6 +24,7 @@ type authContextKey int
 const (
 	userIDKey authContextKey = iota
 	emailKey
+	timezoneKey
 )
 
 // Add this new type to capture the response
@@ -146,6 +147,17 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, emailKey, email)
 			}
 
+			// Extract timezone from header
+			timezone := r.Header.Get("X-User-Timezone")
+			if timezone != "" {
+				ctx = context.WithValue(ctx, timezoneKey, timezone)
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Timezone extracted from header\",\"timezone\":\"%s\"}", timezone)
+			} else {
+				// Default to UTC if no timezone provided
+				ctx = context.WithValue(ctx, timezoneKey, "UTC")
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"No timezone header, defaulting to UTC\"}")
+			}
+
 			// Before calling next handler
 			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Proceeding to handler\",\"path\":\"%s\"}", r.URL.Path)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -169,4 +181,10 @@ func GetClerkIDFromContext(ctx context.Context) (string, bool) {
 func GetEmailFromContext(ctx context.Context) (string, bool) {
 	email, ok := ctx.Value(emailKey).(string)
 	return email, ok
+}
+
+// Add a helper function to get timezone
+func GetTimezoneFromContext(ctx context.Context) (string, bool) {
+	timezone, ok := ctx.Value(timezoneKey).(string)
+	return timezone, ok
 }

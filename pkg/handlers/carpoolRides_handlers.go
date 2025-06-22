@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"car-backend/middleware"
 	"car-backend/pkg/models"
 	"car-backend/pkg/repository"
 	"database/sql"
@@ -35,6 +36,16 @@ func (h *CarPoolRideHandler) CreateCarpoolRide(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Get timezone from context for validation
+	timezoneStr, ok := middleware.GetTimezoneFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"No timezone header provided for ride creation\"}")
+		// Don't fail the request, just log a warning
+		timezoneStr = "UTC"
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Timezone header received for ride creation\",\"timezone\":\"%s\"}", timezoneStr)
+	}
+
 	vars := mux.Vars(r)
 	carpoolIDStr := vars["id"]
 
@@ -45,7 +56,7 @@ func (h *CarPoolRideHandler) CreateCarpoolRide(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Creating carpool ride\",\"carpool_id\":\"%s\"}", carpoolID)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Creating carpool ride\",\"carpool_id\":\"%s\",\"timezone\":\"%s\"}", carpoolID, timezoneStr)
 
 	// Get all carpool members first
 	members, err := h.carpoolRepo.GetCarpoolMembers(r.Context(), carpoolID)
@@ -65,16 +76,26 @@ func (h *CarPoolRideHandler) CreateCarpoolRide(w http.ResponseWriter, r *http.Re
 	// Set the carpoolID and participants
 	ride.CarpoolID = carpoolID
 	ride.Participants = members
-	// Status will default to 0 in the repository
+
+	// Validate that StartTime is provided
+	if ride.StartTime.IsZero() {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"StartTime is required but not provided\"}")
+		http.Error(w, "StartTime is required", http.StatusBadRequest)
+		return
+	}
+
+	// Log the start time in both UTC and user's timezone for debugging
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"StartTime provided in request\",\"start_time_utc\":\"%s\",\"timezone\":\"%s\"}",
+		ride.StartTime.Format(time.RFC3339), timezoneStr)
 
 	// These will be set by the repository, but we'll initialize them here for clarity
-	ride.DriverID = uuid.Nil
-	ride.LocationLat = 0
-	ride.LocationLng = 0
-	ride.MilesSaved = 0
+	ride.DriverID = nil
+	ride.LocationLat = nil
+	ride.LocationLng = nil
+	ride.MilesSaved = nil
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Creating ride with participants\",\"carpool_id\":\"%s\",\"participant_count\":%d}",
-		ride.CarpoolID, len(members))
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Creating ride with participants\",\"carpool_id\":\"%s\",\"participant_count\":%d,\"start_time\":\"%s\",\"timezone\":\"%s\"}",
+		ride.CarpoolID, len(members), ride.StartTime.Format(time.RFC3339), timezoneStr)
 
 	if err := h.carpoolRideRepo.CreateCarpoolRide(r.Context(), &ride); err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create carpool ride\",\"error\":\"%v\"}", err)
@@ -88,13 +109,17 @@ func (h *CarPoolRideHandler) CreateCarpoolRide(w http.ResponseWriter, r *http.Re
 }
 
 func (h *CarPoolRideHandler) GetCarpoolRide(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetCarpoolRide called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+
 	w.Header().Set("Content-Type", "application/json")
 
 	vars := mux.Vars(r)
 	rideIDStr := vars["rideID"]
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed rideID from URL\",\"ride_id_str\":\"%s\"}", rideIDStr)
 
 	rideID, err := uuid.Parse(rideIDStr)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid ride ID format\",\"ride_id_str\":\"%s\",\"error\":\"%v\"}", rideIDStr, err)
 		http.Error(w, "Invalid ride ID", http.StatusBadRequest)
 		return
 	}
@@ -252,15 +277,75 @@ func (h *CarPoolRideHandler) RemoveParticipant(w http.ResponseWriter, r *http.Re
 }
 
 func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetCarpoolRidesByDate called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+
+	// Get Clerk ID from the authenticated session using middleware helper
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get Clerk ID from context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Got Clerk ID from context\",\"clerk_id\":\"%s\"}", clerkID)
+
+	// Convert Clerk ID to internal user UUID
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID from Clerk ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Converted Clerk ID to user ID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}", clerkID, userID)
+
 	vars := mux.Vars(r)
 	carpoolIDStr := vars["id"]
 	dateStr := vars["date"]
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed URL variables\",\"carpool_id_str\":\"%s\",\"date_str\":\"%s\"}", carpoolIDStr, dateStr)
 
 	carpoolID, err := uuid.Parse(carpoolIDStr)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
 		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed carpool ID\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	// Verify carpool exists and user has access
+	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool\",\"error\":\"%v\"}", err)
+		http.Error(w, "Carpool not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found carpool\",\"carpool_id\":\"%s\",\"creator_id\":\"%s\"}", carpoolID, carpool.CreatorID)
+
+	// Check if user is creator or member of the carpool
+	if carpool.CreatorID != userID {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User is not creator, checking membership\",\"user_id\":\"%s\",\"creator_id\":\"%s\"}", userID, carpool.CreatorID)
+		// Check if user is a member by getting carpool members
+		members, err := h.carpoolRepo.GetCarpoolMembers(r.Context(), carpoolID)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool members\",\"error\":\"%v\"}", err)
+			http.Error(w, "Failed to verify access", http.StatusInternalServerError)
+			return
+		}
+
+		isMember := false
+		for _, member := range members {
+			if member.ID == userID {
+				isMember = true
+				break
+			}
+		}
+
+		if !isMember {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"User not authorized to access carpool\",\"user_id\":\"%s\",\"carpool_id\":\"%s\"}", userID, carpoolID)
+			http.Error(w, "Not authorized to access this carpool", http.StatusForbidden)
+			return
+		}
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User is member of carpool\",\"user_id\":\"%s\",\"carpool_id\":\"%s\"}", userID, carpoolID)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User is creator of carpool\",\"user_id\":\"%s\",\"carpool_id\":\"%s\"}", userID, carpoolID)
 	}
 
 	// Parse the date string (expected format: "2025-05-05")
@@ -270,6 +355,7 @@ func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *htt
 		http.Error(w, "Invalid date format. Use YYYY-MM-DD", http.StatusBadRequest)
 		return
 	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed date\",\"date\":\"%s\"}", date.Format("2006-01-02"))
 
 	rides, err := h.carpoolRideRepo.GetCarpoolRidesByDate(r.Context(), carpoolID, date)
 	if err != nil {
@@ -289,6 +375,7 @@ func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *htt
 		rides = []models.CarpoolRide{}
 	}
 
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Returning rides\",\"ride_count\":%d}", len(rides))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rides)
 }
@@ -405,4 +492,56 @@ func (h *CarPoolRideHandler) GetUserTotalRides(w http.ResponseWriter, r *http.Re
 	duration := time.Since(startTime)
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetUserTotalRides completed\",\"duration_ms\":%d,\"user_id\":\"%s\",\"total_rides\":%d}",
 		duration.Milliseconds(), userID, totalRides)
+}
+
+func (h *CarPoolRideHandler) GetActiveRides(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetActiveRides called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+
+	// Get timezone from context (set by middleware)
+	timezoneStr, ok := middleware.GetTimezoneFromContext(r.Context())
+	if !ok {
+		timezoneStr = "UTC" // Fallback to UTC
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"No timezone in context, using UTC\"}")
+	}
+
+	// Parse timezone
+	loc, err := time.LoadLocation(timezoneStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"Invalid timezone, using UTC\",\"timezone\":\"%s\",\"error\":\"%v\"}", timezoneStr, err)
+		loc = time.UTC
+		timezoneStr = "UTC"
+	}
+
+	// Get current time in user's timezone
+	now := time.Now().In(loc)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Current time in user timezone\",\"timezone\":\"%s\",\"now\":\"%s\"}", timezoneStr, now.Format(time.RFC3339))
+
+	// Get Clerk ID from the authenticated session using middleware helper
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get Clerk ID from context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Got Clerk ID from context\",\"clerk_id\":\"%s\"}", clerkID)
+
+	// Convert Clerk ID to internal user UUID
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID from Clerk ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Converted Clerk ID to user ID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}", clerkID, userID)
+
+	rides, err := h.carpoolRideRepo.GetActiveRides(r.Context(), userID, timezoneStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get active rides\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		http.Error(w, "Failed to get active rides", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Retrieved active rides\",\"user_id\":\"%s\",\"ride_count\":%d}", userID, len(rides))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rides)
 }

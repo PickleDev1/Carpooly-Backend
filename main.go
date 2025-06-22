@@ -195,12 +195,13 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.DeleteCarPool).Methods("DELETE")
 	protected.HandleFunc("/carpools/search", carpoolHandler.SearchCarPools).Methods("POST")
 
+	protected.HandleFunc("/rides/active", carpoolRideHandler.GetActiveRides).Methods("GET")
 	protected.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
 	protected.HandleFunc("/carpools/rides/{rideID}/updateStatus", carpoolRideHandler.UpdateCarpoolRideStatus).Methods("PUT")
 	r.HandleFunc("/carpools/rides/{rideID}/driver", carpoolRideHandler.UpdateCarpoolRideDriver).Methods("PUT", "OPTIONS")
 	r.HandleFunc("/users/{userID}/rides/total", carpoolRideHandler.GetUserTotalRides).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/carpools/{id}/rides/{rideID}", carpoolRideHandler.GetCarpoolRide).Methods("GET")
 	protected.HandleFunc("/carpools/{id}/rides/{date}", carpoolRideHandler.GetCarpoolRidesByDate).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/carpools/{id}/rides/{rideID}", carpoolRideHandler.GetCarpoolRide).Methods("GET")
 	protected.HandleFunc("/carpools/creator/{creatorID}", carpoolHandler.GetCreatorCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/users/{userID}", carpoolHandler.GetUserCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/{carpoolID}/rides/{rideID}", carpoolRideHandler.DeleteCarpoolRide).Methods("DELETE")
@@ -272,6 +273,7 @@ func main() {
 			"Origin",
 			"Access-Control-Request-Method",
 			"Access-Control-Request-Headers",
+			"X-User-Timezone",
 		},
 		ExposedHeaders:       []string{"Content-Length"},
 		AllowCredentials:     true,
@@ -304,7 +306,7 @@ func main() {
 	inviteHandler := handlers.NewInviteHandler(inviteRepo, userRepo, carpoolRepo)
 	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo, userRepo, carpoolRepo)
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
-	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo)
+	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo, carpoolRideRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo, userRepo)
 
 	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler, locationHandler)
