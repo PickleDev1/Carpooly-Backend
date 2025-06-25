@@ -363,24 +363,15 @@ func (r *CarPoolRideRepository) GetActiveRides(ctx context.Context, userID uuid.
 
 	// Get current time in user's timezone
 	now := time.Now().In(loc)
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Current time in user timezone\",\"timezone\":\"%s\",\"now\":\"%s\"}", timezoneStr, now.Format(time.RFC3339))
+	windowStart := now.Add(-90 * time.Minute)
+	windowEnd := now.Add(90 * time.Minute)
 
-	// Calculate the start and end of the user's current day in their timezone
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	endOfDay := startOfDay.Add(24 * time.Hour)
+	// Convert to UTC for DB query
+	windowStartUTC := windowStart.UTC()
+	windowEndUTC := windowEnd.UTC()
 
-	// Convert to UTC for database query
-	startOfDayUTC := startOfDay.UTC()
-	endOfDayUTC := endOfDay.UTC()
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Active rides window\",\"window_start\":\"%s\",\"window_end\":\"%s\"}", windowStartUTC.Format(time.RFC3339), windowEndUTC.Format(time.RFC3339))
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User's day boundaries in UTC\",\"start_of_day_utc\":\"%s\",\"end_of_day_utc\":\"%s\"}",
-		startOfDayUTC.Format(time.RFC3339), endOfDayUTC.Format(time.RFC3339))
-
-	// Query to get active rides - include rides that are within the user's current day
-	// Include rides that:
-	// 1. Have a start_time within the user's current day (in their timezone)
-	// 2. Have NULL start_time but were created recently (within last 24 hours)
-	// 3. Are ongoing rides (started within the last 8 hours)
 	query := `
 		SELECT cr.id, cr.carpool_id, cr.driver_id, cr.start_time, cr.status, 
 		       cr.location_lat, cr.location_lng, cr.miles_saved, cr.participants, 
@@ -389,24 +380,12 @@ func (r *CarPoolRideRepository) GetActiveRides(ctx context.Context, userID uuid.
 		JOIN carpools c ON cr.carpool_id = c.id
 		JOIN carpool_members cm ON c.id = cm.carpool_id
 		WHERE cm.user_id = $1
-		AND (
-			(cr.start_time IS NULL AND cr.created_at >= NOW() - INTERVAL '24 hours')
-			OR (
-				cr.start_time >= $2::timestamp with time zone
-				AND cr.start_time < $3::timestamp with time zone
-			)
-			OR (
-				cr.start_time >= NOW() - INTERVAL '8 hours'
-				AND cr.start_time <= NOW()
-			)
-		)
+		  AND cr.start_time >= $2
+		  AND cr.start_time <= $3
 		ORDER BY cr.start_time ASC NULLS LAST, cr.created_at DESC
 	`
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing GetActiveRides query\",\"user_id\":\"%s\",\"timezone\":\"%s\",\"start_of_day\":\"%s\",\"end_of_day\":\"%s\"}",
-		userID, timezoneStr, startOfDayUTC.Format(time.RFC3339), endOfDayUTC.Format(time.RFC3339))
-
-	rows, err := r.db.QueryContext(ctx, query, userID, startOfDayUTC, endOfDayUTC)
+	rows, err := r.db.QueryContext(ctx, query, userID, windowStartUTC, windowEndUTC)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetActiveRides query failed\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
 		return nil, fmt.Errorf("failed to query active rides: %w", err)
