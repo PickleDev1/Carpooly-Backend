@@ -18,9 +18,10 @@ type Location struct {
 }
 
 // LocationUpdateRequest represents the data needed to update a user's location
-type LocationUpdateRequest struct {
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
+type UpdateLocationRequest struct {
+	Latitude  float64   `json:"latitude"`
+	Longitude float64   `json:"longitude"`
+	Timestamp time.Time `json:"timestamp,omitempty"` // optional
 }
 
 // LocationSettings represents a user's location sharing preferences

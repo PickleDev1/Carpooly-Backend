@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -29,7 +30,6 @@ func NewLocationHandler(locationRepo *repository.LocationRepository, userRepo *r
 func (h *LocationHandler) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Get clerk ID from context
 	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
 	if !ok {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\"}")
@@ -37,39 +37,36 @@ func (h *LocationHandler) UpdateLocation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get user ID from clerk ID
 	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
 		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
 		return
 	}
 
-	// Get carpool ride ID from URL
 	vars := mux.Vars(r)
 	carpoolRideID, err := uuid.Parse(vars["rideID"])
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ride ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ride ID\",\"ride_id\":\"%s\",\"error\":\"%v\"}", vars["rideID"], err)
 		http.Error(w, "Invalid carpool ride ID", http.StatusBadRequest)
 		return
 	}
 
-	// Parse location update request
-	var location models.LocationUpdateRequest
+	var location models.UpdateLocationRequest
 	if err := json.NewDecoder(r.Body).Decode(&location); err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid request body\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Update location
 	err = h.locationRepo.UpdateLocation(r.Context(), userID, carpoolRideID, &location)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update location\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update location\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"error\":\"%v\"}", userID, carpoolRideID, err)
 		http.Error(w, "Failed to update location", http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Location updated successfully\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"latitude\":%f,\"longitude\":%f}", userID, carpoolRideID, location.Latitude, location.Longitude)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -80,30 +77,32 @@ func (h *LocationHandler) GetLatestLocation(w http.ResponseWriter, r *http.Reque
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["userID"])
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID\",\"user_id\":\"%s\",\"error\":\"%v\"}", vars["userID"], err)
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
 	carpoolRideID, err := uuid.Parse(vars["rideID"])
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ride ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ride ID\",\"ride_id\":\"%s\",\"error\":\"%v\"}", vars["rideID"], err)
 		http.Error(w, "Invalid carpool ride ID", http.StatusBadRequest)
 		return
 	}
 
 	location, err := h.locationRepo.GetLatestLocation(r.Context(), userID, carpoolRideID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get latest location\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get latest location\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"error\":\"%v\"}", userID, carpoolRideID, err)
 		http.Error(w, "Failed to get latest location", http.StatusInternalServerError)
 		return
 	}
 
 	if location == nil {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"Location not found\",\"user_id\":\"%s\",\"ride_id\":\"%s\"}", userID, carpoolRideID)
 		http.Error(w, "Location not found", http.StatusNotFound)
 		return
 	}
 
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Returning latest location\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"latitude\":%f,\"longitude\":%f,\"timestamp\":\"%s\"}", userID, carpoolRideID, location.Latitude, location.Longitude, location.Timestamp.Format(time.RFC3339))
 	json.NewEncoder(w).Encode(location)
 }
 
@@ -114,19 +113,18 @@ func (h *LocationHandler) GetLocationHistory(w http.ResponseWriter, r *http.Requ
 	vars := mux.Vars(r)
 	userID, err := uuid.Parse(vars["userID"])
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID\",\"user_id\":\"%s\",\"error\":\"%v\"}", vars["userID"], err)
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
 	carpoolRideID, err := uuid.Parse(vars["rideID"])
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ride ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ride ID\",\"ride_id\":\"%s\",\"error\":\"%v\"}", vars["rideID"], err)
 		http.Error(w, "Invalid carpool ride ID", http.StatusBadRequest)
 		return
 	}
 
-	// Get limit from query parameter, default to 10
 	limit := 10
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
 		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
@@ -136,11 +134,12 @@ func (h *LocationHandler) GetLocationHistory(w http.ResponseWriter, r *http.Requ
 
 	locations, err := h.locationRepo.GetLocationHistory(r.Context(), userID, carpoolRideID, limit)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get location history\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get location history\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"error\":\"%v\"}", userID, carpoolRideID, err)
 		http.Error(w, "Failed to get location history", http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Returning location history\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"count\":%d}", userID, carpoolRideID, len(locations))
 	json.NewEncoder(w).Encode(locations)
 }
 
@@ -148,7 +147,6 @@ func (h *LocationHandler) GetLocationHistory(w http.ResponseWriter, r *http.Requ
 func (h *LocationHandler) UpdateLocationSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Get clerk ID from context
 	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
 	if !ok {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\"}")
@@ -156,10 +154,9 @@ func (h *LocationHandler) UpdateLocationSettings(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Get user ID from clerk ID
 	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
 		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
 		return
 	}
@@ -173,11 +170,12 @@ func (h *LocationHandler) UpdateLocationSettings(w http.ResponseWriter, r *http.
 
 	err = h.locationRepo.UpdateLocationSettings(r.Context(), userID, &settings)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update location settings\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update location settings\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
 		http.Error(w, "Failed to update location settings", http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Location settings updated successfully\",\"user_id\":\"%s\"}", userID)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -185,7 +183,6 @@ func (h *LocationHandler) UpdateLocationSettings(w http.ResponseWriter, r *http.
 func (h *LocationHandler) GetLocationSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Get clerk ID from context
 	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
 	if !ok {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\"}")
@@ -193,20 +190,43 @@ func (h *LocationHandler) GetLocationSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Get user ID from clerk ID
 	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
 		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
 		return
 	}
 
 	settings, err := h.locationRepo.GetLocationSettings(r.Context(), userID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get location settings\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get location settings\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
 		http.Error(w, "Failed to get location settings", http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Returning location settings\",\"user_id\":\"%s\"}", userID)
 	json.NewEncoder(w).Encode(settings)
+}
+
+// GetAllLatestLocations returns the latest location for all users in a ride
+func (h *LocationHandler) GetAllLatestLocations(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	vars := mux.Vars(r)
+	rideID, err := uuid.Parse(vars["rideID"])
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid ride ID\",\"ride_id\":\"%s\",\"error\":\"%v\"}", vars["rideID"], err)
+		http.Error(w, "Invalid ride ID", http.StatusBadRequest)
+		return
+	}
+
+	locations, err := h.locationRepo.GetAllLatestLocationsForRide(r.Context(), rideID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get all latest locations for ride\",\"ride_id\":\"%s\",\"error\":\"%v\"}", rideID, err)
+		http.Error(w, "Failed to get locations", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Returning all latest locations for ride\",\"ride_id\":\"%s\",\"count\":%d}", rideID, len(locations))
+	json.NewEncoder(w).Encode(locations)
 }

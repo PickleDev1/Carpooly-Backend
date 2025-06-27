@@ -161,7 +161,6 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	// Create separate subrouter for webhook endpoint
 	webhookRouter := r.PathPrefix("/api").Subrouter()
 	webhookRouter.Use(middleware.WebhookAuthMiddleware)
-	webhookRouter.HandleFunc("/profile", userHandler.CreateProfile).Methods("POST")
 
 	// Add Clerk webhook endpoint to the same webhookRouter
 	webhookRouter.HandleFunc("/webhooks/clerk", webhookHandler.HandleClerkWebhook).Methods("POST")
@@ -231,6 +230,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/location/history/{userID}/{rideID}", locationHandler.GetLocationHistory).Methods("GET")
 	protected.HandleFunc("/location/settings", locationHandler.UpdateLocationSettings).Methods("PUT")
 	protected.HandleFunc("/location/settings", locationHandler.GetLocationSettings).Methods("GET")
+	protected.HandleFunc("/location/latest/{rideID}", locationHandler.GetAllLatestLocations).Methods("GET")
 
 	protected.HandleFunc("/users/{id}", userHandler.GetUserByID).Methods("GET")
 

@@ -19,7 +19,7 @@ func NewLocationRepository(db *sql.DB) *LocationRepository {
 }
 
 // UpdateLocation updates or inserts a new location record
-func (r *LocationRepository) UpdateLocation(ctx context.Context, userID, rideID uuid.UUID, location *models.LocationUpdateRequest) error {
+func (r *LocationRepository) UpdateLocation(ctx context.Context, userID, rideID uuid.UUID, location *models.UpdateLocationRequest) error {
 	query := `
 		INSERT INTO location_tracking (user_id, carpool_ride_id, latitude, longitude, timestamp)
 		VALUES ($1, $2, $3, $4, $5)
@@ -156,4 +156,40 @@ func (r *LocationRepository) GetLocationSettings(ctx context.Context, userID uui
 	}
 
 	return settings, nil
+}
+
+// GetAllLatestLocationsForRide returns the latest location for each user in a ride
+func (r *LocationRepository) GetAllLatestLocationsForRide(ctx context.Context, rideID uuid.UUID) ([]*models.Location, error) {
+	query := `
+		SELECT DISTINCT ON (user_id) id, user_id, carpool_ride_id, latitude, longitude, timestamp, created_at
+		FROM location_tracking
+		WHERE carpool_ride_id = $1
+		ORDER BY user_id, timestamp DESC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, rideID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var locations []*models.Location
+	for rows.Next() {
+		location := &models.Location{}
+		err := rows.Scan(
+			&location.ID,
+			&location.UserID,
+			&location.CarpoolRideID,
+			&location.Latitude,
+			&location.Longitude,
+			&location.Timestamp,
+			&location.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		locations = append(locations, location)
+	}
+
+	return locations, nil
 }

@@ -98,6 +98,7 @@ RENAME COLUMN to_user TO to_user_email;
 ALTER TABLE invites 
 ALTER COLUMN to_user_email TYPE VARCHAR(255);
 
+ALTER TABLE invites DROP COLUMN message; 
 
 
 
