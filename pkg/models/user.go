@@ -41,3 +41,15 @@ type UpdateUserProfile struct {
 	HomeLatitude           *float64 `json:"home_latitude,omitempty"`
 	HomeLongitude          *float64 `json:"home_longitude,omitempty"`
 }
+
+// UserActivity represents a row in the user_activity table
+type UserActivity struct {
+	ID          uuid.UUID   `json:"id" db:"id"`
+	UserID      uuid.UUID   `json:"user_id" db:"user_id"`
+	Type        string      `json:"type" db:"activity_type"`
+	RelatedID   *uuid.UUID  `json:"related_id,omitempty" db:"related_id"`
+	RelatedType *string     `json:"related_type,omitempty" db:"related_type"`
+	Description *string     `json:"description,omitempty" db:"description"`
+	Data        interface{} `json:"data,omitempty" db:"data"`
+	Timestamp   time.Time   `json:"timestamp" db:"timestamp"`
+}

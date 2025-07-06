@@ -29,6 +29,8 @@ func NewCarPoolHandler(carpoolRepo *repository.CarPoolRepository, userRepo *repo
 	}
 }
 
+func ptrString(s string) *string { return &s }
+
 func (h *CarPoolHandler) CreateCarPool(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateCarPoolRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -70,6 +72,18 @@ func (h *CarPoolHandler) CreateCarPool(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create carpool", http.StatusInternalServerError)
 		return
 	}
+
+	// Add activity for carpool creation
+	activity := &models.UserActivity{
+		UserID:      carpool.CreatorID,
+		Type:        "carpool_created",
+		RelatedID:   &carpool.ID,
+		RelatedType: ptrString("carpool"),
+		Description: ptrString("Created carpool: " + carpool.CarpoolName),
+		Data:        carpool,
+		Timestamp:   time.Now(),
+	}
+	_ = h.userRepo.AddUserActivity(r.Context(), activity)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(carpool)

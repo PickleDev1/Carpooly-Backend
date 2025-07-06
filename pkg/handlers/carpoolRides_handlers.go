@@ -201,7 +201,39 @@ func (h *CarPoolRideHandler) UpdateCarpoolRideStatus(w http.ResponseWriter, r *h
 		return
 	}
 
+	// If status is completed (2), log activity for all participants
+	if req.Status == 2 {
+		ride, err := h.carpoolRideRepo.GetCarpoolRide(r.Context(), rideID)
+		if err == nil && ride != nil {
+			for _, user := range ride.Participants {
+				activity := &models.UserActivity{
+					UserID:      user.ID,
+					Type:        "ride_completed",
+					RelatedID:   &ride.ID,
+					RelatedType: ptrString("ride"),
+					Description: ptrString("Completed a ride in carpool " + ride.CarpoolID.String()),
+					Data:        ride,
+					Timestamp:   time.Now(),
+				}
+				_ = h.userRepo.AddUserActivity(r.Context(), activity)
+			}
+			if ride.DriverID != nil {
+				activity := &models.UserActivity{
+					UserID:      *ride.DriverID,
+					Type:        "ride_completed",
+					RelatedID:   &ride.ID,
+					RelatedType: ptrString("ride"),
+					Description: ptrString("Completed a ride as driver in carpool " + ride.CarpoolID.String()),
+					Data:        ride,
+					Timestamp:   time.Now(),
+				}
+				_ = h.userRepo.AddUserActivity(r.Context(), activity)
+			}
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 }
 
 func (h *CarPoolRideHandler) GetUserActiveRides(w http.ResponseWriter, r *http.Request) {

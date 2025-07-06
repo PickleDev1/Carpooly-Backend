@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 
 	"car-backend/middleware"
 
@@ -317,4 +318,51 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(user)
+}
+
+func (h *UserHandler) GetUserActivities(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Log request headers
+	headers := make(map[string]string)
+	for k, v := range r.Header {
+		headers[k] = v[0]
+	}
+	headersJSON, _ := json.Marshal(headers)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetUserActivities request headers\",\"headers\":%s}", string(headersJSON))
+
+	claims, ok := clerk.SessionClaimsFromContext(ctx)
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Unauthorized: No Clerk claims in context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Authenticated user for activity fetch\",\"clerk_id\":\"%s\"}", claims.Subject)
+
+	userID, err := h.userRepo.GetUserIDByClerkID(ctx, claims.Subject)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"User not found for activity fetch\",\"clerk_id\":\"%s\",\"error\":%q}", claims.Subject, err.Error())
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Resolved user ID for activity fetch\",\"user_id\":\"%s\"}", userID.String())
+
+	limit := 50 // default limit
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Activity fetch limit\",\"limit\":%d}", limit)
+
+	activities, err := h.userRepo.GetUserActivities(ctx, userID, limit)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to fetch activities\",\"user_id\":\"%s\",\"error\":%q}", userID.String(), err.Error())
+		http.Error(w, "Failed to fetch activities", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Fetched activities\",\"user_id\":\"%s\",\"count\":%d}", userID.String(), len(activities))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(activities)
 }

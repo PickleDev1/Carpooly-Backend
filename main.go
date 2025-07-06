@@ -234,6 +234,8 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 
 	protected.HandleFunc("/users/{id}", userHandler.GetUserByID).Methods("GET")
 
+	protected.HandleFunc("/activity", userHandler.GetUserActivities).Methods("GET")
+
 	return r
 }
 

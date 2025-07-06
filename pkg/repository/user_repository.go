@@ -4,6 +4,7 @@ import (
 	"car-backend/pkg/models"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -16,6 +17,27 @@ type UserRepository struct {
 
 func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
+}
+
+func (r *UserRepository) AddUserActivity(ctx context.Context, activity *models.UserActivity) error {
+	dataJSON, err := json.Marshal(activity.Data)
+	if err != nil {
+		return err
+	}
+	query := `
+        INSERT INTO user_activity (user_id, activity_type, related_id, related_type, description, data, timestamp)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `
+	_, err = r.db.ExecContext(ctx, query,
+		activity.UserID,
+		activity.Type,
+		activity.RelatedID,
+		activity.RelatedType,
+		activity.Description,
+		dataJSON,
+		activity.Timestamp,
+	)
+	return err
 }
 
 func (r *UserRepository) CreateUser(ctx context.Context, user *models.User) error {
@@ -223,4 +245,33 @@ func (r *UserRepository) GetUserByID(id uuid.UUID) (*models.User, error) {
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (r *UserRepository) GetUserActivities(ctx context.Context, userID uuid.UUID, limit int) ([]models.UserActivity, error) {
+	query := `
+		SELECT id, user_id, activity_type, related_id, related_type, description, data, timestamp
+		FROM user_activity
+		WHERE user_id = $1
+		ORDER BY timestamp DESC
+		LIMIT $2
+	`
+	rows, err := r.db.QueryContext(ctx, query, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var activities []models.UserActivity
+	for rows.Next() {
+		var a models.UserActivity
+		var dataRaw []byte
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Type, &a.RelatedID, &a.RelatedType, &a.Description, &dataRaw, &a.Timestamp); err != nil {
+			return nil, err
+		}
+		if len(dataRaw) > 0 {
+			_ = json.Unmarshal(dataRaw, &a.Data)
+		}
+		activities = append(activities, a)
+	}
+	return activities, nil
 }

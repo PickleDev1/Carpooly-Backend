@@ -35,7 +35,7 @@ func NewInviteHandler(inviteRepo *repository.InviteRepository, userRepo *reposit
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	var invite models.CreateInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&invite); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request body\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request body\",\"error\":%v}", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -51,8 +51,7 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	// Convert clerk ID to user ID
 	fromUserID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
-			clerkID, err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":%v}", clerkID, err)
 		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
 		return
 	}
@@ -60,8 +59,7 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	// Parse carpool ID
 	carpoolID, err := uuid.Parse(invite.CarpoolID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id\":\"%s\",\"error\":\"%v\"}",
-			invite.CarpoolID, err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id\":\"%s\",\"error\":%v}", invite.CarpoolID, err)
 		http.Error(w, "Invalid carpool ID format", http.StatusBadRequest)
 		return
 	}
@@ -79,14 +77,39 @@ func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	// Create the invite in the database
 	if err := h.inviteRepo.CreateInvite(r.Context(), newInvite); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create invite\",\"invite_id\":\"%s\",\"error\":\"%v\"}",
-			newInvite.ID, err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create invite\",\"invite_id\":\"%s\",\"error\":%v}", newInvite.ID, err)
 		http.Error(w, "Failed to create invite", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully created invite\",\"invite_id\":\"%s\",\"from_user\":\"%s\",\"to_user\":\"%s\"}",
-		newInvite.ID, fromUserID, invite.Email)
+	// Add activity for sender
+	activitySender := &models.UserActivity{
+		UserID:      fromUserID,
+		Type:        "invite_sent",
+		RelatedID:   &newInvite.ID,
+		RelatedType: ptrString("invite"),
+		Description: ptrString("Sent invite to " + invite.Email),
+		Data:        newInvite,
+		Timestamp:   newInvite.CreatedAt,
+	}
+	_ = h.userRepo.AddUserActivity(r.Context(), activitySender)
+
+	// Try to add activity for recipient (if user exists)
+	recipientUser, err := h.userRepo.GetUserByClerkID(invite.Email)
+	if err == nil && recipientUser != nil {
+		activityRecipient := &models.UserActivity{
+			UserID:      recipientUser.ID,
+			Type:        "invite_received",
+			RelatedID:   &newInvite.ID,
+			RelatedType: ptrString("invite"),
+			Description: ptrString("Received invite from " + clerkID),
+			Data:        newInvite,
+			Timestamp:   newInvite.CreatedAt,
+		}
+		_ = h.userRepo.AddUserActivity(r.Context(), activityRecipient)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully created invite\",\"invite_id\":\"%s\",\"from_user\":\"%s\",\"to_user\":\"%s\"}", newInvite.ID, fromUserID, invite.Email)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
