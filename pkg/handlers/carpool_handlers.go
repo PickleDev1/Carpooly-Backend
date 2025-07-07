@@ -113,7 +113,23 @@ func (h *CarPoolHandler) GetCarPool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CarPoolHandler) UpdateCarPool(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement
+	carpoolID := mux.Vars(r)["id"]
+	var req models.UpdateCarPoolRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	id, err := uuid.Parse(carpoolID)
+	if err != nil {
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+	err = h.carpoolRepo.UpdateCarPool(r.Context(), id, &req)
+	if err != nil {
+		http.Error(w, "Failed to update carpool", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *CarPoolHandler) DeleteCarPool(w http.ResponseWriter, r *http.Request) {

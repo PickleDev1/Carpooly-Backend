@@ -380,3 +380,13 @@ func (r *CarPoolRepository) AddUserToFutureRides(ctx context.Context, carpoolID,
 // Add methods like:
 // UpdateCarPool
 // SearchCarPools
+
+func (r *CarPoolRepository) UpdateCarPool(ctx context.Context, carpoolID uuid.UUID, req *models.UpdateCarPoolRequest) error {
+	query := `
+		UPDATE carpools
+		SET available_seats = $1, updated_at = NOW()
+		WHERE id = $2
+	`
+	_, err := r.db.ExecContext(ctx, query, req.AvailableSeats, carpoolID)
+	return err
+}
