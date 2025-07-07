@@ -349,8 +349,124 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		defer respRides.Body.Close()
+
+		// 3. Create notification for the inviter
+		// Get carpool details for the notification
+		carpool, err := h.carpoolRepo.GetCarPool(r.Context(), invite.CarpoolID)
+		carpoolName := "Unknown Carpool"
+		if err != nil {
+			log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to get carpool details for notification\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", invite.CarpoolID, err)
+			// Don't fail the entire request if we can't get carpool details
+		} else {
+			carpoolName = carpool.CarpoolName
+		}
+
+		// Create notification activity for the inviter
+		inviterActivity := &models.UserActivity{
+			UserID:      invite.FromUser,
+			Type:        "invite_accepted",
+			RelatedID:   &inviteID,
+			RelatedType: ptrString("invite"),
+			Description: ptrString(fmt.Sprintf("%s accepted your invite to join carpool: %s", user.DisplayName, carpoolName)),
+			Data: map[string]interface{}{
+				"invite_id":     inviteID,
+				"accepted_by":   user.ID,
+				"accepted_name": user.DisplayName,
+				"carpool_id":    invite.CarpoolID,
+				"carpool_name":  carpoolName,
+			},
+			Timestamp: time.Now(),
+		}
+
+		if err := h.userRepo.AddUserActivity(r.Context(), inviterActivity); err != nil {
+			log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to create notification for inviter\",\"inviter_id\":\"%s\",\"error\":\"%v\"}", invite.FromUser, err)
+			// Don't fail the entire request if notification creation fails
+		} else {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Created notification for inviter\",\"inviter_id\":\"%s\",\"accepted_by\":\"%s\",\"carpool_name\":\"%s\"}",
+				invite.FromUser, user.DisplayName, carpoolName)
+		}
+
+		// 4. Add activity for the user who accepted the invite
+		acceptedActivity := &models.UserActivity{
+			UserID:      user.ID,
+			Type:        "invite_accepted",
+			RelatedID:   &inviteID,
+			RelatedType: ptrString("invite"),
+			Description: ptrString(fmt.Sprintf("You accepted an invite to join carpool: %s", carpoolName)),
+			Data: map[string]interface{}{
+				"invite_id":    inviteID,
+				"carpool_id":   invite.CarpoolID,
+				"carpool_name": carpoolName,
+			},
+			Timestamp: time.Now(),
+		}
+
+		if err := h.userRepo.AddUserActivity(r.Context(), acceptedActivity); err != nil {
+			log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to create activity for accepted invite\",\"user_id\":\"%s\",\"error\":\"%v\"}", user.ID, err)
+			// Don't fail the entire request if activity creation fails
+		}
 	} else {
 		err = h.inviteRepo.UpdateInviteStatus(r.Context(), inviteID, req.Status)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update invite status\",\"error\":\"%v\"}", err)
+			http.Error(w, "Failed to update invite status", http.StatusInternalServerError)
+			return
+		}
+
+		// Create notification for rejected invites
+		if req.Status == models.InviteStatusRejected {
+			// Get carpool details for the notification
+			carpool, err := h.carpoolRepo.GetCarPool(r.Context(), invite.CarpoolID)
+			carpoolName := "Unknown Carpool"
+			if err != nil {
+				log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to get carpool details for rejection notification\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", invite.CarpoolID, err)
+			} else {
+				carpoolName = carpool.CarpoolName
+			}
+
+			// Create notification activity for the inviter
+			inviterActivity := &models.UserActivity{
+				UserID:      invite.FromUser,
+				Type:        "invite_rejected",
+				RelatedID:   &inviteID,
+				RelatedType: ptrString("invite"),
+				Description: ptrString(fmt.Sprintf("%s declined your invite to join carpool: %s", user.DisplayName, carpoolName)),
+				Data: map[string]interface{}{
+					"invite_id":     inviteID,
+					"rejected_by":   user.ID,
+					"rejected_name": user.DisplayName,
+					"carpool_id":    invite.CarpoolID,
+					"carpool_name":  carpoolName,
+				},
+				Timestamp: time.Now(),
+			}
+
+			if err := h.userRepo.AddUserActivity(r.Context(), inviterActivity); err != nil {
+				log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to create rejection notification for inviter\",\"inviter_id\":\"%s\",\"error\":\"%v\"}", invite.FromUser, err)
+			} else {
+				log.Printf("{\"severity\":\"INFO\",\"message\":\"Created rejection notification for inviter\",\"inviter_id\":\"%s\",\"rejected_by\":\"%s\",\"carpool_name\":\"%s\"}",
+					invite.FromUser, user.DisplayName, carpoolName)
+			}
+
+			// Add activity for the user who rejected the invite
+			rejectedActivity := &models.UserActivity{
+				UserID:      user.ID,
+				Type:        "invite_rejected",
+				RelatedID:   &inviteID,
+				RelatedType: ptrString("invite"),
+				Description: ptrString(fmt.Sprintf("You declined an invite to join carpool: %s", carpoolName)),
+				Data: map[string]interface{}{
+					"invite_id":    inviteID,
+					"carpool_id":   invite.CarpoolID,
+					"carpool_name": carpoolName,
+				},
+				Timestamp: time.Now(),
+			}
+
+			if err := h.userRepo.AddUserActivity(r.Context(), rejectedActivity); err != nil {
+				log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to create activity for rejected invite\",\"user_id\":\"%s\",\"error\":\"%v\"}", user.ID, err)
+			}
+		}
 	}
 
 	if err != nil {
