@@ -109,11 +109,15 @@ func (h *CarPoolRideHandler) CreateCarpoolRide(w http.ResponseWriter, r *http.Re
 }
 
 func (h *CarPoolRideHandler) GetCarpoolRide(w http.ResponseWriter, r *http.Request) {
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetCarpoolRide called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetCarpoolRide called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	// Log all URL variables for debugging
+	vars := mux.Vars(r)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"URL variables\",\"vars\":\"%+v\"}", vars)
 
 	w.Header().Set("Content-Type", "application/json")
-
-	vars := mux.Vars(r)
 	rideIDStr := vars["rideID"]
 	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed rideID from URL\",\"ride_id_str\":\"%s\"}", rideIDStr)
 
@@ -123,18 +127,54 @@ func (h *CarPoolRideHandler) GetCarpoolRide(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Invalid ride ID", http.StatusBadRequest)
 		return
 	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully parsed ride ID\",\"ride_id\":\"%s\"}", rideID)
+
+	// Get Clerk ID from context for user context
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if ok {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Request from authenticated user\",\"clerk_id\":\"%s\",\"ride_id\":\"%s\"}", clerkID, rideID)
+	} else {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"No Clerk ID in context\",\"ride_id\":\"%s\"}", rideID)
+	}
 
 	ride, err := h.carpoolRideRepo.GetCarpoolRide(r.Context(), rideID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "Carpool ride not found", http.StatusNotFound)
-			return
-		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Repository error getting carpool ride\",\"ride_id\":\"%s\",\"error\":\"%v\"}", rideID, err)
 		http.Error(w, fmt.Sprintf("Failed to get carpool ride: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(ride)
+	if ride == nil {
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"Carpool ride not found\",\"ride_id\":\"%s\"}", rideID)
+		http.Error(w, "Carpool ride not found", http.StatusNotFound)
+		return
+	}
+
+	// Log ride details before sending response
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Retrieved ride details\",\"ride_id\":\"%s\",\"carpool_id\":\"%s\",\"participant_count\":%d,\"status\":%d,\"start_time\":\"%s\"}",
+		rideID, ride.CarpoolID, len(ride.Participants), ride.Status, ride.StartTime.Format(time.RFC3339))
+
+	// Ensure participants is never null in response
+	if ride.Participants == nil {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"Participants is nil, initializing as empty slice\",\"ride_id\":\"%s\"}", rideID)
+		ride.Participants = []models.User{}
+	}
+
+	// Log participant details for debugging
+	for i, participant := range ride.Participants {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Participant details\",\"ride_id\":\"%s\",\"participant_index\":%d,\"participant_id\":\"%s\",\"display_name\":\"%s\"}",
+			rideID, i, participant.ID, participant.DisplayName)
+	}
+
+	if err := json.NewEncoder(w).Encode(ride); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"ride_id\":\"%s\",\"error\":\"%v\"}", rideID, err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetCarpoolRide completed successfully\",\"ride_id\":\"%s\",\"duration_ms\":%d,\"participant_count\":%d}",
+		rideID, duration.Milliseconds(), len(ride.Participants))
 }
 
 func (h *CarPoolRideHandler) DeleteCarpoolRide(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +349,12 @@ func (h *CarPoolRideHandler) RemoveParticipant(w http.ResponseWriter, r *http.Re
 }
 
 func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *http.Request) {
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetCarpoolRidesByDate called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetCarpoolRidesByDate called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	// Log all URL variables for debugging
+	vars := mux.Vars(r)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetCarpoolRidesByDate URL variables\",\"vars\":\"%+v\"}", vars)
 
 	// Get Clerk ID from the authenticated session using middleware helper
 	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
@@ -328,8 +373,6 @@ func (h *CarPoolRideHandler) GetCarpoolRidesByDate(w http.ResponseWriter, r *htt
 		return
 	}
 	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Converted Clerk ID to user ID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}", clerkID, userID)
-
-	vars := mux.Vars(r)
 	carpoolIDStr := vars["id"]
 	dateStr := vars["date"]
 	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed URL variables\",\"carpool_id_str\":\"%s\",\"date_str\":\"%s\"}", carpoolIDStr, dateStr)

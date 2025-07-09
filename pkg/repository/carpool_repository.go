@@ -38,7 +38,7 @@ func (r *CarPoolRepository) CreateCarPool(ctx context.Context, carpool *models.C
 	err = tx.QueryRowContext(
 		ctx, query,
 		carpool.CreatorID, carpool.CarpoolName, carpool.Status,
-		carpool.RecurringOption, carpool.AvailableSeats, carpool.DestinationAddress, carpool.Seats,
+		carpool.RecurringOption, carpool.AvailableSeats, carpool.DestinationAddress, carpool.TotalSeats,
 	).Scan(&carpool.ID, &carpool.CreatedAt, &carpool.UpdatedAt)
 
 	if err != nil {
@@ -89,10 +89,13 @@ func (r *CarPoolRepository) GetCarPool(ctx context.Context, carpoolID uuid.UUID)
 		&carpool.RecurringOption,
 		&carpool.AvailableSeats,
 		&carpool.DestinationAddress,
-		&carpool.Seats,
+		&carpool.TotalSeats,
 		&carpool.CreatedAt,
 		&carpool.UpdatedAt,
 	)
+
+	// Set the legacy Seats field to match TotalSeats
+	carpool.Seats = carpool.TotalSeats
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -211,13 +214,15 @@ func (r *CarPoolRepository) GetCarpoolsByCreatorID(ctx context.Context, creatorI
 			&carpool.RecurringOption,
 			&carpool.AvailableSeats,
 			&carpool.DestinationAddress,
-			&carpool.Seats,
+			&carpool.TotalSeats,
 			&carpool.CreatedAt,
 			&carpool.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan carpool: %v", err)
 		}
+		// Set the legacy Seats field to match TotalSeats
+		carpool.Seats = carpool.TotalSeats
 		carpools = append(carpools, carpool)
 	}
 
@@ -252,13 +257,15 @@ func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUI
 			&carpool.RecurringOption,
 			&carpool.AvailableSeats,
 			&carpool.DestinationAddress,
-			&carpool.Seats,
+			&carpool.TotalSeats,
 			&carpool.CreatedAt,
 			&carpool.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan carpool: %w", err)
 		}
+		// Set the legacy Seats field to match TotalSeats
+		carpool.Seats = carpool.TotalSeats
 		carpools = append(carpools, carpool)
 	}
 
@@ -310,14 +317,42 @@ func (r *CarPoolRepository) GetCarpoolMembers(ctx context.Context, carpoolID uui
 	return members, nil
 }
 
-// AddCarpoolMemberByAPI adds a user to carpool_members
+// AddCarpoolMemberByAPI adds a user to carpool_members and decrements available seats
 func (r *CarPoolRepository) AddCarpoolMemberByAPI(ctx context.Context, carpoolID, userID uuid.UUID) error {
-	_, err := r.db.ExecContext(ctx, `
+	// Start a transaction to ensure both operations succeed or fail together
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback() // Will be ignored if tx.Commit() is called
+
+	// First, add the user to carpool_members
+	_, err = tx.ExecContext(ctx, `
         INSERT INTO carpool_members (carpool_id, user_id, created_at, updated_at)
         VALUES ($1, $2, NOW(), NOW())
         ON CONFLICT (carpool_id, user_id) DO NOTHING
     `, carpoolID, userID)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to add carpool member: %v", err)
+	}
+
+	// Then, decrement available seats (but not below 0)
+	_, err = tx.ExecContext(ctx, `
+        UPDATE carpools 
+        SET available_seats = GREATEST(available_seats - 1, 0), updated_at = NOW()
+        WHERE id = $1
+    `, carpoolID)
+	if err != nil {
+		return fmt.Errorf("failed to update available seats: %v", err)
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully added carpool member and updated seats\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}", carpoolID, userID)
+	return nil
 }
 
 // AddUserToFutureRides adds a user to all future rides' participants
@@ -382,11 +417,22 @@ func (r *CarPoolRepository) AddUserToFutureRides(ctx context.Context, carpoolID,
 // SearchCarPools
 
 func (r *CarPoolRepository) UpdateCarPool(ctx context.Context, carpoolID uuid.UUID, req *models.UpdateCarPoolRequest) error {
+	// When updating available seats, we need to ensure we don't exceed total capacity
+	// The frontend sends the new total seats, we calculate available seats for others
+	totalSeats := req.AvailableSeats          // This is actually total seats from frontend
+	availableSeatsForOthers := totalSeats - 1 // Reserve one seat for creator
+	if availableSeatsForOthers < 0 {
+		availableSeatsForOthers = 0
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Updating carpool seats\",\"carpool_id\":\"%s\",\"total_seats\":%d,\"available_for_others\":%d}",
+		carpoolID, totalSeats, availableSeatsForOthers)
+
 	query := `
 		UPDATE carpools
-		SET available_seats = $1, updated_at = NOW()
-		WHERE id = $2
+		SET available_seats = $1, seats = $2, total_seats = $2, updated_at = NOW()
+		WHERE id = $3
 	`
-	_, err := r.db.ExecContext(ctx, query, req.AvailableSeats, carpoolID)
+	_, err := r.db.ExecContext(ctx, query, availableSeatsForOthers, totalSeats, carpoolID)
 	return err
 }

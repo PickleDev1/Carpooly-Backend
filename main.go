@@ -189,6 +189,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 
 	protected.HandleFunc("/carpools", carpoolHandler.CreateCarPool).Methods("POST")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.GetCarPool).Methods("GET")
+	protected.HandleFunc("/carpools/{id}/creator", carpoolHandler.GetCarpoolCreator).Methods("GET")
 	protected.HandleFunc("/carpools/{carpoolID}/members", carpoolHandler.GetCarpoolMembers).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.UpdateCarPool).Methods("PUT")
 	protected.HandleFunc("/carpools/{id}", carpoolHandler.DeleteCarPool).Methods("DELETE")
@@ -199,8 +200,9 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/carpools/rides/{rideID}/updateStatus", carpoolRideHandler.UpdateCarpoolRideStatus).Methods("PUT")
 	r.HandleFunc("/carpools/rides/{rideID}/driver", carpoolRideHandler.UpdateCarpoolRideDriver).Methods("PUT", "OPTIONS")
 	r.HandleFunc("/users/{userID}/rides/total", carpoolRideHandler.GetUserTotalRides).Methods("GET", "OPTIONS")
+	// Commented out to avoid route conflict - using date-based route instead
+	// protected.HandleFunc("/carpools/{id}/rides/{rideID}", carpoolRideHandler.GetCarpoolRide).Methods("GET")
 	protected.HandleFunc("/carpools/{id}/rides/{date}", carpoolRideHandler.GetCarpoolRidesByDate).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/carpools/{id}/rides/{rideID}", carpoolRideHandler.GetCarpoolRide).Methods("GET")
 	protected.HandleFunc("/carpools/creator/{creatorID}", carpoolHandler.GetCreatorCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/users/{userID}", carpoolHandler.GetUserCarpools).Methods("GET")
 	protected.HandleFunc("/carpools/{carpoolID}/rides/{rideID}", carpoolRideHandler.DeleteCarpoolRide).Methods("DELETE")
@@ -263,6 +265,7 @@ func main() {
 		AllowedOrigins: []string{
 			"https://carpooly-web.vercel.app",
 			"http://localhost:3000",
+			"http://localhost:3001",
 			"http://localhost:8080",
 			"https://car-backend-latest-884945568547.us-west1.run.app",
 		},

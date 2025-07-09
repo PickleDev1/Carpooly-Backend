@@ -13,9 +13,10 @@ type Carpool struct {
 	CarpoolName        string    `json:"carpool_name" db:"carpool_name"`
 	Status             bool      `json:"status" db:"status"`
 	RecurringOption    string    `json:"recurring_option" db:"recurring_option"`
-	AvailableSeats     int       `json:"available_seats" db:"available_seats"`
+	AvailableSeats     int       `json:"available_seats" db:"available_seats"` // Seats available for others (excluding creator)
+	TotalSeats         int       `json:"total_seats" db:"seats"`               // Total capacity including creator
 	DestinationAddress string    `json:"destination_address" db:"destination_address"`
-	Seats              int       `json:"seats" db:"seats"`
+	Seats              int       `json:"seats" db:"seats"` // Legacy field - same as TotalSeats
 	CreatedAt          time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at" db:"updated_at"`
 }

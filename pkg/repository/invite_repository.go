@@ -252,6 +252,14 @@ func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID)
 		return err
 	}
 
+	// 4.5. Decrement available seats (but not below 0)
+	_, err = tx.ExecContext(ctx, `UPDATE carpools SET available_seats = GREATEST(available_seats - 1, 0), updated_at = NOW() WHERE id = $1`, carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update available seats\",\"error\":\"%v\"}", err)
+		tx.Rollback()
+		return err
+	}
+
 	// 5. For each future ride, update participants in Go
 	rows, err := tx.QueryContext(ctx, `SELECT id, participants, start_time FROM carpool_rides WHERE carpool_id = $1`, carpoolID)
 	if err != nil {

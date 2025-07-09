@@ -57,14 +57,24 @@ func (h *CarPoolHandler) CreateCarPool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create carpool object
+	// The frontend sends the total number of seats they want
+	// We automatically reserve one seat for the creator (driver)
+	totalSeats := req.AvailableSeats // This is actually the total seats from frontend
+	availableSeatsForOthers := totalSeats - 1
+	if availableSeatsForOthers < 0 {
+		availableSeatsForOthers = 0
+	}
+	log.Printf("[DEBUG] Creating carpool: totalSeats=%d, availableSeats=%d", totalSeats, availableSeatsForOthers)
+
 	carpool := &models.Carpool{
-		CreatorID:          userID, // Use actual userID from context(commented out in code above)
+		CreatorID:          userID, // Use actual userID from context
 		CarpoolName:        req.CarpoolName,
 		Status:             false, // Default status
 		RecurringOption:    req.RecurringOption,
-		AvailableSeats:     req.AvailableSeats,
+		AvailableSeats:     availableSeatsForOthers, // Correct value
+		TotalSeats:         totalSeats,              // Total capacity including creator
 		DestinationAddress: req.DestinationAddress,
-		Seats:              req.Seats,
+		Seats:              totalSeats, // Legacy field - same as TotalSeats
 	}
 
 	if err := h.carpoolRepo.CreateCarPool(r.Context(), carpool); err != nil {
@@ -113,22 +123,77 @@ func (h *CarPoolHandler) GetCarPool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CarPoolHandler) UpdateCarPool(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"UpdateCarPool called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	w.Header().Set("Content-Type", "application/json")
+
 	carpoolID := mux.Vars(r)["id"]
 	var req models.UpdateCarPoolRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request body\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
 	id, err := uuid.Parse(carpoolID)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", carpoolID, err)
 		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
 		return
 	}
+
+	// Verify carpool exists and user has permission to update it
+	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Carpool not found\",\"carpool_id\":\"%s\"}", id)
+			http.Error(w, "Carpool not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", id, err)
+		http.Error(w, "Failed to get carpool", http.StatusInternalServerError)
+		return
+	}
+
+	// Get user ID from context to verify ownership
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\",\"carpool_id\":\"%s\"}", id)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
+		http.Error(w, "Failed to verify user", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify that the user is the creator of the carpool
+	if carpool.CreatorID != userID {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"User not authorized to update carpool\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"creator_id\":\"%s\"}",
+			id, userID, carpool.CreatorID)
+		http.Error(w, "Not authorized to update this carpool", http.StatusForbidden)
+		return
+	}
+
+	// Log the update request
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Updating carpool\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"requested_seats\":%d}",
+		id, userID, req.AvailableSeats)
+
 	err = h.carpoolRepo.UpdateCarPool(r.Context(), id, &req)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update carpool\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", id, err)
 		http.Error(w, "Failed to update carpool", http.StatusInternalServerError)
 		return
 	}
+
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully updated carpool\",\"carpool_id\":\"%s\",\"duration_ms\":%d}",
+		id, duration.Milliseconds())
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -351,4 +416,74 @@ func (h *CarPoolHandler) AddUserToFutureRidesAPI(w http.ResponseWriter, r *http.
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GetCarpoolCreator returns the creator ID of a carpool
+func (h *CarPoolHandler) GetCarpoolCreator(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetCarpoolCreator called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Get user ID from context for logging
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"No clerk ID in context for GetCarpoolCreator\"}")
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetCarpoolCreator request from user\",\"clerk_id\":\"%s\"}", clerkID)
+	}
+
+	params := mux.Vars(r)
+	carpoolIDStr := params["id"]
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsing carpool ID\",\"carpool_id_str\":\"%s\"}", carpoolIDStr)
+
+	carpoolID, err := uuid.Parse(carpoolIDStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id_str\":\"%s\",\"error\":\"%v\",\"user_agent\":\"%s\"}",
+			carpoolIDStr, err, r.UserAgent())
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully parsed carpool ID\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	// Fetch carpool from database
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Fetching carpool from database\",\"carpool_id\":\"%s\"}", carpoolID)
+	carpool, err := h.carpoolRepo.GetCarPool(r.Context(), carpoolID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Carpool not found in database\",\"carpool_id\":\"%s\",\"user_agent\":\"%s\"}",
+				carpoolID, r.UserAgent())
+			http.Error(w, "Carpool not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database error while fetching carpool\",\"carpool_id\":\"%s\",\"error\":\"%v\",\"user_agent\":\"%s\"}",
+			carpoolID, err, r.UserAgent())
+		http.Error(w, "Failed to get carpool", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully retrieved carpool from database\",\"carpool_id\":\"%s\",\"carpool_name\":\"%s\",\"creator_id\":\"%s\"}",
+		carpoolID, carpool.CarpoolName, carpool.CreatorID)
+
+	// Prepare response
+	response := map[string]interface{}{
+		"creator_id": carpool.CreatorID,
+		"carpool_id": carpool.ID,
+	}
+
+	// Log successful response
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully retrieved carpool creator\",\"carpool_id\":\"%s\",\"creator_id\":\"%s\",\"carpool_name\":\"%s\",\"duration_ms\":%d,\"user_agent\":\"%s\"}",
+		carpoolID, carpool.CreatorID, carpool.CarpoolName, duration.Milliseconds(), r.UserAgent())
+
+	// Encode and send response
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", carpoolID, err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Response sent successfully\",\"carpool_id\":\"%s\",\"creator_id\":\"%s\"}", carpoolID, carpool.CreatorID)
 }

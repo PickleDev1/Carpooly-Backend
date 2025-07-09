@@ -71,31 +71,76 @@ func (r *CarPoolRideRepository) CreateCarpoolRide(ctx context.Context, ride *mod
 }
 
 func (r *CarPoolRideRepository) GetCarpoolRide(ctx context.Context, rideID uuid.UUID) (*models.CarpoolRide, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetCarpoolRide called\",\"ride_id\":\"%s\"}", rideID)
+
 	ride := &models.CarpoolRide{}
 
 	query := `
-			SELECT id, carpool_id, driver_id, status, location_lat, location_lng, miles_saved, created_at, updated_at
+			SELECT id, carpool_id, driver_id, start_time, status, location_lat, location_lng, miles_saved, participants, created_at, updated_at
 			FROM carpool_rides
 			WHERE id = $1
 	`
 
+	var participantsJSON []byte
+	var locationLat, locationLng, milesSaved sql.NullFloat64
+	var driverID sql.NullString
+	var startTime sql.NullTime
+
 	err := r.db.QueryRowContext(ctx, query, rideID).Scan(
 		&ride.ID,
 		&ride.CarpoolID,
-		&ride.DriverID,
+		&driverID,
+		&startTime,
 		&ride.Status,
-		&ride.LocationLat,
-		&ride.LocationLng,
-		&ride.MilesSaved,
+		&locationLat,
+		&locationLng,
+		&milesSaved,
+		&participantsJSON,
 		&ride.CreatedAt,
 		&ride.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Carpool ride not found\",\"ride_id\":\"%s\"}", rideID)
 			return nil, nil
 		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get carpool ride\",\"ride_id\":\"%s\",\"error\":\"%v\"}", rideID, err)
 		return nil, fmt.Errorf("failed to get carpool ride: %w", err)
 	}
+
+	// Handle NULL values
+	if locationLat.Valid {
+		ride.LocationLat = &locationLat.Float64
+	}
+	if locationLng.Valid {
+		ride.LocationLng = &locationLng.Float64
+	}
+	if milesSaved.Valid {
+		ride.MilesSaved = &milesSaved.Float64
+	}
+	if driverID.Valid {
+		parsedDriverID, _ := uuid.Parse(driverID.String)
+		ride.DriverID = &parsedDriverID
+	}
+	if startTime.Valid {
+		ride.StartTime = startTime.Time
+	}
+
+	// Parse participants JSON
+	if len(participantsJSON) > 0 {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsing participants JSON\",\"ride_id\":\"%s\",\"json_length\":%d,\"json\":\"%s\"}", rideID, len(participantsJSON), string(participantsJSON))
+		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to unmarshal participants JSON\",\"ride_id\":\"%s\",\"error\":\"%v\",\"json\":\"%s\"}", rideID, err, string(participantsJSON))
+			return nil, fmt.Errorf("failed to unmarshal participants: %w", err)
+		}
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully parsed participants\",\"ride_id\":\"%s\",\"participant_count\":%d}", rideID, len(ride.Participants))
+	} else {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"No participants JSON found\",\"ride_id\":\"%s\"}", rideID)
+		ride.Participants = []models.User{} // Initialize as empty slice instead of nil
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully retrieved carpool ride\",\"ride_id\":\"%s\",\"carpool_id\":\"%s\",\"participant_count\":%d,\"status\":%d}",
+		rideID, ride.CarpoolID, len(ride.Participants), ride.Status)
 
 	return ride, nil
 }
