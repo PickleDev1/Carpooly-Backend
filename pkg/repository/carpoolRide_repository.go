@@ -506,3 +506,32 @@ func (r *CarPoolRideRepository) GetActiveRides(ctx context.Context, userID uuid.
 	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetActiveRides found rides\",\"user_id\":\"%s\",\"timezone\":\"%s\",\"ride_count\":%d}", userID, timezoneStr, len(rides))
 	return rides, nil
 }
+
+// AddParticipant adds a user to the participants array of a ride if not already present
+func (r *CarPoolRideRepository) AddParticipant(ctx context.Context, rideID uuid.UUID, user models.User) error {
+	// Fetch current participants
+	ride, err := r.GetCarpoolRide(ctx, rideID)
+	if err != nil {
+		return err
+	}
+	if ride == nil {
+		return fmt.Errorf("ride not found")
+	}
+	// Check if user is already a participant
+	for _, p := range ride.Participants {
+		if p.ID == user.ID {
+			return nil // already present, nothing to do
+		}
+	}
+	// Add user to participants
+	participants := append(ride.Participants, user)
+	participantsJSON, err := json.Marshal(participants)
+	if err != nil {
+		return fmt.Errorf("failed to marshal participants: %v", err)
+	}
+	_, err = r.db.ExecContext(ctx, `UPDATE carpool_rides SET participants = $1, updated_at = NOW() WHERE id = $2`, participantsJSON, rideID)
+	if err != nil {
+		return fmt.Errorf("failed to update participants: %v", err)
+	}
+	return nil
+}

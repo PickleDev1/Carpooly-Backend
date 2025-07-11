@@ -664,3 +664,92 @@ func (h *CarPoolRideHandler) GetRideByCarpoolAndDateParticipants(w http.Response
 	}
 	log.Printf("[INFO] Successfully returned ride object for carpoolID=%s on date=%s", carpoolID, date.Format("2006-01-02"))
 }
+
+// AddParticipantToRide adds a user to the participants array of a ride
+func (h *CarPoolRideHandler) AddParticipantToRide(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"AddParticipantToRide called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	vars := mux.Vars(r)
+	rideIDStr := vars["rideID"]
+	rawClerkID := vars["userID"]
+
+	// Parse ride ID
+	rideID, err := uuid.Parse(rideIDStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid ride ID\",\"ride_id_str\":\"%s\",\"error\":\"%v\"}", rideIDStr, err)
+		http.Error(w, "Invalid ride ID", http.StatusBadRequest)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully parsed ride ID\",\"ride_id\":\"%s\"}", rideID)
+
+	// Handle Clerk ID conversion
+	if rawClerkID == "" {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Missing userID parameter\"}")
+		http.Error(w, "Missing userID parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Add "user_" prefix if it's missing
+	clerkID := rawClerkID
+	if !strings.HasPrefix(rawClerkID, "user_") {
+		clerkID = "user_" + rawClerkID
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Added user_ prefix to clerk ID\",\"raw_clerk_id\":\"%s\",\"clerk_id\":\"%s\"}",
+			rawClerkID, clerkID)
+	}
+
+	// Convert clerk_id to user_id
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}",
+			clerkID, err)
+		if err == sql.ErrNoRows {
+			http.Error(w, "User not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully converted clerk ID to user ID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}",
+		clerkID, userID)
+
+	// Get user object
+	user, err := h.userRepo.GetUserByID(userID)
+	if err != nil || user == nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"User not found\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully retrieved user object\",\"user_id\":\"%s\",\"user_email\":\"%s\"}", userID, user.Email)
+
+	// Add participant to ride
+	err = h.carpoolRideRepo.AddParticipant(r.Context(), rideID, *user)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to add participant to ride\",\"ride_id\":\"%s\",\"user_id\":\"%s\",\"error\":\"%v\"}", rideID, userID, err)
+		http.Error(w, "Failed to add participant", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully added participant to ride\",\"ride_id\":\"%s\",\"user_id\":\"%s\"}", rideID, userID)
+
+	// Fetch updated ride
+	updatedRide, err := h.carpoolRideRepo.GetCarpoolRide(r.Context(), rideID)
+	if err != nil || updatedRide == nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to fetch updated ride\",\"ride_id\":\"%s\",\"error\":\"%v\"}", rideID, err)
+		http.Error(w, "Failed to fetch updated ride", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully fetched updated ride\",\"ride_id\":\"%s\",\"participant_count\":%d}", rideID, len(updatedRide.Participants))
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(updatedRide); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"AddParticipantToRide completed\",\"duration_ms\":%d,\"ride_id\":\"%s\",\"user_id\":\"%s\",\"clerk_id\":\"%s\"}",
+		duration.Milliseconds(), rideID, userID, clerkID)
+}
