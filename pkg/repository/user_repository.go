@@ -70,28 +70,57 @@ func (r *UserRepository) CreateUser(ctx context.Context, user *models.User) erro
 }
 
 func (r *UserRepository) UpdateProfile(ctx context.Context, userID string, update *models.UpdateUserProfile) error {
-	query := `
-        UPDATE users 
-        SET 
-            display_name = COALESCE($1, display_name),
-            city = COALESCE($2, city),
-            state = COALESCE($3, state),
-            location_sharing_enabled = COALESCE($4, location_sharing_enabled),
-            home_latitude = COALESCE($5, home_latitude),
-            home_longitude = COALESCE($6, home_longitude),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $7
-    `
-	_, err := r.db.ExecContext(ctx, query,
-		update.DisplayName,
-		update.City,
-		update.State,
-		update.LocationSharingEnabled,
-		update.HomeLatitude,
-		update.HomeLongitude,
-		userID,
-	)
-	return err
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateProfile called\",\"user_id\":\"%s\"}", userID)
+
+	// Build dynamic query based on which fields are provided
+	var setClauses []string
+	var args []interface{}
+	argIndex := 1
+
+	// Helper function to add field if not nil
+	addField := func(field interface{}, columnName string) {
+		if field != nil {
+			setClauses = append(setClauses, fmt.Sprintf("%s = $%d", columnName, argIndex))
+			args = append(args, field)
+			argIndex++
+		}
+	}
+
+	// Add fields that are provided
+	addField(update.DisplayName, "display_name")
+	addField(update.City, "city")
+	addField(update.State, "state")
+	addField(update.LocationSharingEnabled, "location_sharing_enabled")
+	addField(update.HomeLatitude, "home_latitude")
+	addField(update.HomeLongitude, "home_longitude")
+
+	// If no fields to update, return early
+	if len(setClauses) == 0 {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"No fields to update\",\"user_id\":\"%s\"}", userID)
+		return nil
+	}
+
+	// Add updated_at
+	setClauses = append(setClauses, fmt.Sprintf("updated_at = CURRENT_TIMESTAMP"))
+
+	// Build the query
+	query := fmt.Sprintf(`
+		UPDATE users 
+		SET %s
+		WHERE id = $%d
+	`, strings.Join(setClauses, ", "), argIndex)
+	args = append(args, userID)
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing UpdateProfile query\",\"query\":\"%s\",\"args\":%v}", query, args)
+
+	_, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update profile\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to update profile: %v", err)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Profile updated successfully\",\"user_id\":\"%s\",\"fields_updated\":%d}", userID, len(setClauses)-1) // -1 for updated_at
+	return nil
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id string) (*models.User, error) {

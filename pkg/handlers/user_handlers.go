@@ -118,15 +118,52 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	// Convert Clerk ID to user UUID
 	userID, err := h.userRepo.GetUserIDByClerkID(ctx, claims.Subject)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user UUID from Clerk ID\",\"clerk_id\":\"%s\",\"error\":%q}", claims.Subject, err.Error())
-		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
-		return
-	}
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"User not found, creating new user\",\"clerk_id\":\"%s\",\"error\":%q}", claims.Subject, err.Error())
 
-	if err := h.userRepo.UpdateProfile(ctx, userID.String(), &update); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update user profile\",\"error\":%q}", err.Error())
-		http.Error(w, "Failed to update profile", http.StatusInternalServerError)
-		return
+		// Create new user if they don't exist
+		newUser := &models.User{
+			ID:          uuid.New(),
+			ClerkID:     claims.Subject,
+			DisplayName: "",
+			City:        "",
+			State:       "",
+		}
+
+		// Set provided fields from the update request
+		if update.DisplayName != nil {
+			newUser.DisplayName = *update.DisplayName
+		}
+		if update.City != nil {
+			newUser.City = *update.City
+		}
+		if update.State != nil {
+			newUser.State = *update.State
+		}
+		if update.LocationSharingEnabled != nil {
+			newUser.LocationSharingEnabled = *update.LocationSharingEnabled
+		}
+		if update.HomeLatitude != nil {
+			newUser.HomeLatitude = *update.HomeLatitude
+		}
+		if update.HomeLongitude != nil {
+			newUser.HomeLongitude = *update.HomeLongitude
+		}
+
+		if err := h.userRepo.CreateUser(ctx, newUser); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to create new user\",\"clerk_id\":\"%s\",\"error\":%q}", claims.Subject, err.Error())
+			http.Error(w, "Failed to create user profile", http.StatusInternalServerError)
+			return
+		}
+
+		userID = newUser.ID
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"Created new user for profile update\",\"user_id\":\"%s\",\"clerk_id\":\"%s\"}", userID.String(), claims.Subject)
+	} else {
+		// User exists, update their profile
+		if err := h.userRepo.UpdateProfile(ctx, userID.String(), &update); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update user profile\",\"error\":%q}", err.Error())
+			http.Error(w, "Failed to update profile", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"User profile updated successfully\",\"user_id\":\"%s\"}", userID.String())
