@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -159,6 +160,15 @@ func (r *UserRepository) CreateUserIfNotExists(ctx context.Context, user *models
 }
 
 func (r *UserRepository) GetUserIDByClerkID(ctx context.Context, clerkID string) (uuid.UUID, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetUserIDByClerkID called\",\"clerk_id\":\"%s\",\"clerk_id_length\":%d}", clerkID, len(clerkID))
+
+	// Trim whitespace and check for empty
+	clerkID = strings.TrimSpace(clerkID)
+	if clerkID == "" {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Empty clerk_id after trimming\"}")
+		return uuid.Nil, fmt.Errorf("empty clerk_id")
+	}
+
 	var userID uuid.UUID
 
 	// Query to get user ID from users table using clerk_id
@@ -168,15 +178,34 @@ func (r *UserRepository) GetUserIDByClerkID(ctx context.Context, clerkID string)
         WHERE clerk_id = $1
     `
 
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing query\",\"query\":\"%s\",\"clerk_id\":\"%s\"}", query, clerkID)
+
 	err := r.db.QueryRowContext(ctx, query, clerkID).Scan(&userID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			log.Printf("{\"severity\":\"ERROR\",\"message\":\"No user found for clerk_id\",\"clerk_id\":\"%s\"}", clerkID)
+
+			// Let's also check if there are any similar clerk_ids for debugging
+			var similarClerkIDs []string
+			rows, debugErr := r.db.QueryContext(ctx, "SELECT clerk_id FROM users WHERE clerk_id ILIKE $1 LIMIT 5", "%"+clerkID+"%")
+			if debugErr == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var similarID string
+					if rows.Scan(&similarID) == nil {
+						similarClerkIDs = append(similarClerkIDs, similarID)
+					}
+				}
+			}
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Similar clerk_ids found\",\"similar_ids\":%v}", similarClerkIDs)
+
 			return uuid.Nil, fmt.Errorf("no user found for clerk_id: %s", clerkID)
 		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database error in GetUserIDByClerkID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
 		return uuid.Nil, fmt.Errorf("error querying user: %w", err)
 	}
 
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully found user ID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}", clerkID, userID)
 	return userID, nil
 }
 
@@ -274,4 +303,82 @@ func (r *UserRepository) GetUserActivities(ctx context.Context, userID uuid.UUID
 		activities = append(activities, a)
 	}
 	return activities, nil
+}
+
+// DeleteUser deletes a user and handles all related data cleanup
+func (r *UserRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting user deletion\",\"user_id\":\"%s\"}", userID)
+
+	// Start a transaction to ensure data consistency
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to begin transaction\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Remove user from carpool_members
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Removing user from carpool_members\",\"user_id\":\"%s\"}", userID)
+	_, err = tx.ExecContext(ctx, "DELETE FROM carpool_members WHERE user_id = $1", userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove from carpool_members\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to remove from carpool_members: %v", err)
+	}
+
+	// 2. Remove user from carpool_rides participants (JSON array)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Removing user from carpool_rides participants\",\"user_id\":\"%s\"}", userID)
+	_, err = tx.ExecContext(ctx, `
+		UPDATE carpool_rides 
+		SET participants = (
+			SELECT jsonb_agg(participant)
+			FROM jsonb_array_elements(participants) AS participant
+			WHERE participant->>'id' != $1::text
+		)
+		WHERE participants @> jsonb_build_array(jsonb_build_object('id', $1::text))
+	`, userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove from carpool_rides participants\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to remove from carpool_rides participants: %v", err)
+	}
+
+	// 3. Remove user's invites (both sent and received)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Removing user's invites\",\"user_id\":\"%s\"}", userID)
+	_, err = tx.ExecContext(ctx, "DELETE FROM invites WHERE from_user = $1", userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove invites\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to remove invites: %v", err)
+	}
+
+	// 4. Remove user's location data
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Removing user's location data\",\"user_id\":\"%s\"}", userID)
+	_, err = tx.ExecContext(ctx, "DELETE FROM location_tracking WHERE user_id = $1", userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove location data\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to remove location data: %v", err)
+	}
+
+	// 5. Remove user's activity records
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Removing user's activity records\",\"user_id\":\"%s\"}", userID)
+	_, err = tx.ExecContext(ctx, "DELETE FROM user_activity WHERE user_id = $1", userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove activity records\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to remove activity records: %v", err)
+	}
+
+	// 6. Finally, delete the user record
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Deleting user record\",\"user_id\":\"%s\"}", userID)
+	_, err = tx.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to delete user record\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to delete user record: %v", err)
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to commit transaction\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"User deleted successfully\",\"user_id\":\"%s\"}", userID)
+	return nil
 }

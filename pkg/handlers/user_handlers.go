@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strconv"
+	"time"
 
 	"car-backend/middleware"
 
@@ -277,7 +278,10 @@ func (h *UserHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 
 // GetUserByID returns all user data for a given user ID or Clerk ID
 func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Starting GetUserByID handler")
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetUserByID called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
 	ctx := r.Context()
 
 	// Get user ID from URL path using mux.Vars
@@ -289,13 +293,20 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Processing user ID\",\"id\":\"%s\",\"id_length\":%d,\"starts_with_user\":%t}",
+		id, len(id), len(id) > 5 && id[:5] == "user_")
+
 	var userID string
 	if len(id) > 5 && id[:5] == "user_" {
 		// It's a Clerk ID, convert to user UUID
 		uuid, err := h.userRepo.GetUserIDByClerkID(ctx, id)
 		if err != nil {
 			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to convert Clerk ID to user UUID\",\"clerk_id\":\"%s\",\"error\":%q}", id, err.Error())
-			http.Error(w, "Failed to get user by Clerk ID", http.StatusInternalServerError)
+			if err.Error() == "no user found for clerk_id: "+id {
+				http.Error(w, "User not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "Failed to get user by Clerk ID", http.StatusInternalServerError)
+			}
 			return
 		}
 		userID = uuid.String()
@@ -317,7 +328,15 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Fetched user by ID\",\"user\":%s}", string(userJSON))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	if err := json.NewEncoder(w).Encode(user); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetUserByID completed\",\"duration_ms\":%d,\"user_id\":\"%s\"}",
+		duration.Milliseconds(), userID)
 }
 
 func (h *UserHandler) GetUserActivities(w http.ResponseWriter, r *http.Request) {
@@ -365,4 +384,84 @@ func (h *UserHandler) GetUserActivities(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(activities)
+}
+
+// DeleteUser deletes a user by ID (UUID or Clerk ID)
+func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"DeleteUser called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	ctx := r.Context()
+
+	// Get user ID from URL path using mux.Vars
+	vars := mux.Vars(r)
+	id := vars["id"]
+	if id == "" {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Missing user ID in path params\"}")
+		http.Error(w, "Missing user ID", http.StatusBadRequest)
+		return
+	}
+
+	var userID uuid.UUID
+	if len(id) > 5 && id[:5] == "user_" {
+		// It's a Clerk ID, convert to user UUID
+		uuid, err := h.userRepo.GetUserIDByClerkID(ctx, id)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to convert Clerk ID to user UUID\",\"clerk_id\":\"%s\",\"error\":%q}", id, err.Error())
+			if err.Error() == "no user found for clerk_id: "+id {
+				http.Error(w, "User not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "Failed to get user by Clerk ID", http.StatusInternalServerError)
+			}
+			return
+		}
+		userID = uuid
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"Converted Clerk ID to user UUID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}", id, userID)
+	} else {
+		// It's a UUID
+		parsedUUID, err := uuid.Parse(id)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid UUID format\",\"id\":\"%s\",\"error\":%q}", id, err.Error())
+			http.Error(w, "Invalid user ID format", http.StatusBadRequest)
+			return
+		}
+		userID = parsedUUID
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"Parsed UUID\",\"user_id\":\"%s\"}", userID)
+	}
+
+	// Verify user exists before deletion
+	user, err := h.userRepo.GetByID(ctx, userID.String())
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"User not found\",\"user_id\":\"%s\",\"error\":%q}", userID, err.Error())
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Found user to delete\",\"user_id\":\"%s\",\"email\":\"%s\",\"display_name\":\"%s\"}",
+		userID, user.Email, user.DisplayName)
+
+	// Delete the user
+	err = h.userRepo.DeleteUser(ctx, userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to delete user\",\"user_id\":\"%s\",\"error\":%q}", userID, err.Error())
+		http.Error(w, "Failed to delete user", http.StatusInternalServerError)
+		return
+	}
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	response := map[string]string{
+		"message": "User deleted successfully",
+		"user_id": userID.String(),
+	}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"error\":\"%v\"}", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"DeleteUser completed\",\"duration_ms\":%d,\"user_id\":\"%s\",\"email\":\"%s\"}",
+		duration.Milliseconds(), userID, user.Email)
 }
