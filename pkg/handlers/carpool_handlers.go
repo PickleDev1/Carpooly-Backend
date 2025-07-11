@@ -366,32 +366,60 @@ func (h *CarPoolHandler) GetCarpoolMembers(w http.ResponseWriter, r *http.Reques
 
 // AddCarpoolMemberAPI handles adding a user to carpool_members
 func (h *CarPoolHandler) AddCarpoolMemberAPI(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"AddCarpoolMemberAPI called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+
 	vars := mux.Vars(r)
 	carpoolIDStr := vars["carpoolID"]
 	carpoolID, err := uuid.Parse(carpoolIDStr)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID format\",\"carpool_id_str\":\"%s\",\"error\":\"%v\"}", carpoolIDStr, err)
 		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
 		return
 	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed carpool ID\",\"carpool_id\":\"%s\"}", carpoolID)
+
 	var req models.AddCarpoolMemberRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to decode request body\",\"error\":\"%v\"}", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	userID, err := uuid.Parse(req.UserID)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid user ID format\",\"user_id_str\":\"%s\",\"error\":\"%v\"}", req.UserID, err)
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Adding member to carpool\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}", carpoolID, userID)
+
+	// 1. Add user to carpool_members and decrement available seats
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Step 1: Adding user to carpool_members table\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}", carpoolID, userID)
 	err = h.carpoolRepo.AddCarpoolMemberByAPI(r.Context(), carpoolID, userID)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to add user to carpool_members\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"error\":\"%v\"}", carpoolID, userID, err)
 		http.Error(w, "Failed to add member", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully added user to carpool_members\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}", carpoolID, userID)
+
+	// 2. Add user to all rides (both past and future) for this carpool
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Step 2: Adding user to all rides\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}", carpoolID, userID)
+	err = h.carpoolRepo.AddUserToFutureRides(r.Context(), carpoolID, userID)
+	if err != nil {
+		// Log the error but don't fail the request since the member was already added
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to add user to rides\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"error\":\"%v\"}", carpoolID, userID, err)
+	} else {
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully added user to all rides\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}", carpoolID, userID)
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"AddCarpoolMemberAPI completed\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"duration_ms\":%d}", carpoolID, userID, duration.Milliseconds())
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// AddUserToFutureRidesAPI handles adding a user to all future rides' participants
+// AddUserToAllRidesAPI handles adding a user to all rides' participants (past and future)
 func (h *CarPoolHandler) AddUserToFutureRidesAPI(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	carpoolIDStr := vars["carpoolID"]

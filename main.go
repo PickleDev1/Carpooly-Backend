@@ -237,6 +237,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/users/{id}", userHandler.GetUserByID).Methods("GET")
 
 	protected.HandleFunc("/activity", userHandler.GetUserActivities).Methods("GET")
+	protected.HandleFunc("/carpools/{carpoolID}/days/{date}/participants", carpoolRideHandler.GetRideByCarpoolAndDateParticipants).Methods("GET")
 
 	return r
 }
@@ -311,7 +312,7 @@ func main() {
 	inviteHandler := handlers.NewInviteHandler(inviteRepo, userRepo, carpoolRepo)
 	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo, userRepo, carpoolRepo)
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
-	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo, carpoolRideRepo)
+	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo, carpoolRideRepo, userRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo, userRepo)
 
 	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler, locationHandler)

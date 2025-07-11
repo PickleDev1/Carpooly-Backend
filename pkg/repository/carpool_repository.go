@@ -355,8 +355,10 @@ func (r *CarPoolRepository) AddCarpoolMemberByAPI(ctx context.Context, carpoolID
 	return nil
 }
 
-// AddUserToFutureRides adds a user to all future rides' participants
+// AddUserToAllRides adds a user to all rides' participants (past and future)
 func (r *CarPoolRepository) AddUserToFutureRides(ctx context.Context, carpoolID, userID uuid.UUID) error {
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"AddUserToFutureRides started\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}", carpoolID, userID)
+
 	// Get user details
 	var user models.User
 	err := r.db.QueryRowContext(ctx, `
@@ -365,31 +367,50 @@ func (r *CarPoolRepository) AddUserToFutureRides(ctx context.Context, carpoolID,
     `, userID).Scan(
 		&user.ID, &user.ClerkID, &user.Email, &user.Name, &user.DisplayName, &user.City, &user.State, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user details\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
 		return err
 	}
-	// Get all future rides
-	rows, err := r.db.QueryContext(ctx, `SELECT id, participants, start_time FROM carpool_rides WHERE carpool_id = $1`, carpoolID)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Retrieved user details\",\"user_id\":\"%s\",\"email\":\"%s\",\"name\":\"%s\"}", user.ID, user.Email, user.DisplayName)
+
+	// Get all rides (past and future)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, participants, start_time FROM carpool_rides WHERE carpool_id = $1 ORDER BY start_time ASC`, carpoolID)
 	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to query carpool rides\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", carpoolID, err)
 		return err
 	}
 	defer rows.Close()
-	now := time.Now()
+
+	rideCount := 0
+	addedToRides := 0
+	alreadyInRides := 0
+	errorCount := 0
+
 	for rows.Next() {
+		rideCount++
 		var rideID uuid.UUID
 		var participantsJSON []byte
 		var startTime time.Time
 		if err := rows.Scan(&rideID, &participantsJSON, &startTime); err != nil {
-			return err
-		}
-		if startTime.Before(now) {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan ride row\",\"ride_count\":%d,\"ride_id\":\"%s\",\"error\":\"%v\"}", rideCount, rideID, err)
+			errorCount++
 			continue
 		}
+
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Processing ride\",\"ride_count\":%d,\"ride_id\":\"%s\",\"start_time\":\"%s\",\"carpool_id\":\"%s\",\"user_id\":\"%s\"}",
+			rideCount, rideID, startTime.Format("2006-01-02 15:04:05"), carpoolID, userID)
+
+		// Remove the time check - add to ALL rides, not just future ones
 		var participants []models.User
 		if len(participantsJSON) > 0 {
 			if err := json.Unmarshal(participantsJSON, &participants); err != nil {
-				return err
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to unmarshal participants JSON\",\"ride_id\":\"%s\",\"error\":\"%v\",\"json_length\":%d}", rideID, err, len(participantsJSON))
+				errorCount++
+				continue
 			}
 		}
+
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Current participants in ride\",\"ride_id\":\"%s\",\"participant_count\":%d}", rideID, len(participants))
+
 		alreadyIn := false
 		for _, p := range participants {
 			if p.ID == user.ID {
@@ -397,18 +418,40 @@ func (r *CarPoolRepository) AddUserToFutureRides(ctx context.Context, carpoolID,
 				break
 			}
 		}
+
 		if !alreadyIn {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Adding user to ride participants\",\"ride_id\":\"%s\",\"user_id\":\"%s\",\"before_count\":%d}", rideID, userID, len(participants))
 			participants = append(participants, user)
 			updatedJSON, err := json.Marshal(participants)
 			if err != nil {
-				return err
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to marshal updated participants\",\"ride_id\":\"%s\",\"error\":\"%v\"}", rideID, err)
+				errorCount++
+				continue
 			}
+
 			_, err = r.db.ExecContext(ctx, `UPDATE carpool_rides SET participants = $1, updated_at = NOW() WHERE id = $2`, updatedJSON, rideID)
 			if err != nil {
-				return err
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update ride participants in DB\",\"ride_id\":\"%s\",\"error\":\"%v\"}", rideID, err)
+				errorCount++
+				continue
 			}
+
+			addedToRides++
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully added user to ride\",\"ride_id\":\"%s\",\"user_id\":\"%s\",\"after_count\":%d}", rideID, userID, len(participants))
+		} else {
+			alreadyInRides++
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User already in ride participants\",\"ride_id\":\"%s\",\"user_id\":\"%s\"}", rideID, userID)
 		}
 	}
+
+	if err = rows.Err(); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Error during rows iteration\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", carpoolID, err)
+		return err
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"AddUserToFutureRides completed\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"total_rides\":%d,\"added_to_rides\":%d,\"already_in_rides\":%d,\"errors\":%d}",
+		carpoolID, userID, rideCount, addedToRides, alreadyInRides, errorCount)
+
 	return nil
 }
 

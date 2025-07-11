@@ -620,3 +620,47 @@ func (h *CarPoolRideHandler) GetActiveRides(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rides)
 }
+
+// GetRideByCarpoolAndDateParticipants returns the full ride object for a carpool and date
+func (h *CarPoolRideHandler) GetRideByCarpoolAndDateParticipants(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[INFO] GetRideByCarpoolAndDateParticipants called. Method: %s, URL: %s, RemoteAddr: %s, UserAgent: %s", r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+	vars := mux.Vars(r)
+	carpoolIDStr := vars["carpoolID"]
+	dateStr := vars["date"]
+	log.Printf("[DEBUG] Input params: carpoolID=%s, date=%s", carpoolIDStr, dateStr)
+
+	carpoolID, err := uuid.Parse(carpoolIDStr)
+	if err != nil {
+		log.Printf("[ERROR] Invalid carpool ID: %s, error: %v", carpoolIDStr, err)
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+	date, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		log.Printf("[ERROR] Invalid date format: %s, error: %v", dateStr, err)
+		http.Error(w, "Invalid date format. Use YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	log.Printf("[INFO] Fetching rides for carpoolID=%s on date=%s", carpoolID, date.Format("2006-01-02"))
+	rides, err := h.carpoolRideRepo.GetCarpoolRidesByDate(r.Context(), carpoolID, date)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get rides for carpoolID=%s, date=%s, error: %v", carpoolID, date.Format("2006-01-02"), err)
+		http.Error(w, "Failed to get rides", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[INFO] Number of rides found: %d", len(rides))
+	if len(rides) == 0 {
+		log.Printf("[WARN] No ride found for carpoolID=%s on date=%s", carpoolID, date.Format("2006-01-02"))
+		http.Error(w, "No ride found for this carpool and date", http.StatusNotFound)
+		return
+	}
+	ride := rides[0]
+	log.Printf("[INFO] Returning ride ID: %s for carpoolID=%s on date=%s", ride.ID, carpoolID, date.Format("2006-01-02"))
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(ride); err != nil {
+		log.Printf("[ERROR] Failed to encode ride response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[INFO] Successfully returned ride object for carpoolID=%s on date=%s", carpoolID, date.Format("2006-01-02"))
+}

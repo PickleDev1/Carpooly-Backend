@@ -22,13 +22,15 @@ type CarpoolScheduleHandler struct {
 	scheduleRepo *repository.CarpoolScheduleRepository
 	carpoolRepo  *repository.CarPoolRepository
 	rideRepo     *repository.CarPoolRideRepository
+	userRepo     *repository.UserRepository
 }
 
-func NewCarpoolScheduleHandler(scheduleRepo *repository.CarpoolScheduleRepository, carpoolRepo *repository.CarPoolRepository, rideRepo *repository.CarPoolRideRepository) *CarpoolScheduleHandler {
+func NewCarpoolScheduleHandler(scheduleRepo *repository.CarpoolScheduleRepository, carpoolRepo *repository.CarPoolRepository, rideRepo *repository.CarPoolRideRepository, userRepo *repository.UserRepository) *CarpoolScheduleHandler {
 	return &CarpoolScheduleHandler{
 		scheduleRepo: scheduleRepo,
 		carpoolRepo:  carpoolRepo,
 		rideRepo:     rideRepo,
+		userRepo:     userRepo,
 	}
 }
 
@@ -374,21 +376,28 @@ func (h *CarpoolScheduleHandler) generateRidesFromSchedule(ctx context.Context, 
 				schedule.StartTime.Location(),
 			)
 
-			// Only create rides that are in the future
-			if rideStartTime.After(time.Now()) {
-				ride := &models.CarpoolRide{
-					ID:        uuid.New(),
-					CarpoolID: schedule.CarpoolID,
-					StartTime: rideStartTime,
-					Status:    0, // Default status (pending)
-					CreatedAt: time.Now(),
-					UpdatedAt: time.Now(),
-				}
-
-				rides = append(rides, ride)
-				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Generated ride\",\"ride_id\":\"%s\",\"start_time\":\"%s\"}",
-					ride.ID, ride.StartTime.Format("2006-01-02 15:04:05"))
+			// Always create rides, regardless of date
+			creator, err := h.userRepo.GetUserByID(carpool.CreatorID)
+			if err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to fetch creator for ride participants\",\"creator_id\":\"%s\",\"error\":\"%v\"}", carpool.CreatorID, err)
 			}
+			participants := []models.User{}
+			if creator != nil {
+				participants = append(participants, *creator)
+			}
+			ride := &models.CarpoolRide{
+				ID:           uuid.New(),
+				CarpoolID:    schedule.CarpoolID,
+				StartTime:    rideStartTime,
+				Status:       0, // Default status (pending)
+				Participants: participants,
+				CreatedAt:    time.Now(),
+				UpdatedAt:    time.Now(),
+			}
+
+			rides = append(rides, ride)
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Generated ride\",\"ride_id\":\"%s\",\"start_time\":\"%s\"}",
+				ride.ID, ride.StartTime.Format("2006-01-02 15:04:05"))
 		}
 
 		// Move to next day

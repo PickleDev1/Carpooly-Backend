@@ -260,38 +260,45 @@ func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID)
 		return err
 	}
 
-	// 5. For each future ride, update participants in Go
-	rows, err := tx.QueryContext(ctx, `SELECT id, participants, start_time FROM carpool_rides WHERE carpool_id = $1`, carpoolID)
+	// 5. For each ride (past and future), update participants in Go
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Processing rides for user addition\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"user_email\":\"%s\"}", carpoolID, user.ID, user.Email)
+	rows, err := tx.QueryContext(ctx, `SELECT id, participants, start_time FROM carpool_rides WHERE carpool_id = $1 ORDER BY start_time ASC`, carpoolID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to select carpool rides\",\"error\":\"%v\"}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to select carpool rides\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", carpoolID, err)
 		tx.Rollback()
 		return err
 	}
 	defer rows.Close()
-	now := time.Now()
+
+	rideCount := 0
+	addedToRides := 0
+	alreadyInRides := 0
+	errorCount := 0
+
 	for rows.Next() {
+		rideCount++
 		var rideID uuid.UUID
 		var participantsJSON []byte
 		var startTime time.Time
 		if err := rows.Scan(&rideID, &participantsJSON, &startTime); err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan ride row\",\"ride_id\":\"%v\",\"error\":\"%v\"}", rideID, err)
-			tx.Rollback()
-			return err
-		}
-		if startTime.Before(now) {
-			log.Printf("{\"severity\":\"INFO\",\"message\":\"Skipping past ride\",\"ride_id\":\"%v\",\"start_time\":\"%v\"}", rideID, startTime)
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan ride row\",\"ride_count\":%d,\"ride_id\":\"%v\",\"error\":\"%v\"}", rideCount, rideID, err)
+			errorCount++
 			continue
 		}
-		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Processing ride for participant update\",\"ride_id\":\"%v\",\"user_id\":\"%v\"}", rideID, user.ID)
+		// Remove the time check - add to ALL rides, not just future ones
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Processing ride for participant update\",\"ride_count\":%d,\"ride_id\":\"%v\",\"user_id\":\"%v\",\"start_time\":\"%v\"}", rideCount, rideID, user.ID, startTime)
 		var participants []models.User
 		if len(participantsJSON) > 0 {
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Unmarshalling participants JSON\",\"ride_id\":\"%v\",\"json\":%s}", rideID, string(participantsJSON))
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Unmarshalling participants JSON\",\"ride_id\":\"%v\",\"json_length\":%d}", rideID, len(participantsJSON))
 			if err := json.Unmarshal(participantsJSON, &participants); err != nil {
 				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to unmarshal participants JSON\",\"ride_id\":\"%v\",\"error\":\"%v\"}", rideID, err)
-				tx.Rollback()
-				return err
+				errorCount++
+				continue
 			}
 		}
+
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Current participants in ride\",\"ride_id\":\"%v\",\"participant_count\":%d}", rideID, len(participants))
+
 		// Check if user already in participants
 		alreadyIn := false
 		for _, p := range participants {
@@ -306,24 +313,29 @@ func (r *InviteRepository) AcceptInvite(ctx context.Context, inviteID uuid.UUID)
 			updatedJSON, err := json.Marshal(participants)
 			if err != nil {
 				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to marshal updated participants\",\"ride_id\":\"%v\",\"error\":\"%v\"}", rideID, err)
-				tx.Rollback()
-				return err
+				errorCount++
+				continue
 			}
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Updating ride participants in DB\",\"ride_id\":\"%v\",\"user_id\":\"%v\",\"after_count\":%d,\"json\":%s}", rideID, user.ID, len(participants), string(updatedJSON))
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Updating ride participants in DB\",\"ride_id\":\"%v\",\"user_id\":\"%v\",\"after_count\":%d}", rideID, user.ID, len(participants))
 			_, err = tx.ExecContext(ctx,
 				"UPDATE carpool_rides SET participants = $1, updated_at = NOW() WHERE id = $2",
 				updatedJSON, rideID,
 			)
 			if err != nil {
 				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to update ride participants in DB\",\"ride_id\":\"%v\",\"error\":\"%+v\"}", rideID, err)
-				tx.Rollback()
-				return err
+				errorCount++
+				continue
 			}
+			addedToRides++
 			log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully added user to ride participants\",\"ride_id\":\"%v\",\"user_id\":\"%v\"}", rideID, user.ID)
 		} else {
-			log.Printf("{\"severity\":\"INFO\",\"message\":\"User already in participants\",\"ride_id\":\"%v\",\"user_id\":\"%v\"}", rideID, user.ID)
+			alreadyInRides++
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User already in participants\",\"ride_id\":\"%v\",\"user_id\":\"%v\"}", rideID, user.ID)
 		}
 	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Ride processing completed\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"total_rides\":%d,\"added_to_rides\":%d,\"already_in_rides\":%d,\"errors\":%d}",
+		carpoolID, user.ID, rideCount, addedToRides, alreadyInRides, errorCount)
 
 	if err := tx.Commit(); err != nil {
 		return err
