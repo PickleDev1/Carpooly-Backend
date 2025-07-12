@@ -238,6 +238,8 @@ func (h *InviteHandler) GetUserInvites(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"UpdateInviteStatus called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+
 	w.Header().Set("Content-Type", "application/json")
 
 	// Get clerk ID from context
@@ -247,6 +249,7 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Clerk ID extracted\",\"clerk_id\":\"%s\"}", clerkID)
 
 	vars := mux.Vars(r)
 	inviteIDStr := vars["id"]
@@ -476,4 +479,58 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// GetAcceptedInvitesSentByUser returns all accepted invites sent by the current user
+func (h *InviteHandler) GetAcceptedInvitesSentByUser(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetAcceptedInvitesSentByUser ROUTE CALLED\"}")
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetAcceptedInvitesSentByUser called\",\"method\":\"%s\",\"url\":\"%s\",\"path\":\"%s\"}", r.Method, r.URL.String(), r.URL.Path)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Route handler is working - this should appear in logs\"}")
+
+	// Get the logged-in user's ID from context
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"No clerk ID in context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Clerk ID extracted\",\"clerk_id\":\"%s\"}", clerkID)
+
+	// Convert clerk ID to user ID
+	fromUserID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":%v}", clerkID, err)
+		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"User ID converted\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}", clerkID, fromUserID)
+
+	// Get accepted invites sent by this user
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Calling repository to get accepted invites\",\"from_user_id\":\"%s\"}", fromUserID)
+	invites, err := h.inviteRepo.GetAcceptedInvitesSentByUser(r.Context(), fromUserID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get accepted invites\",\"from_user_id\":\"%s\",\"error\":%v}", fromUserID, err)
+		http.Error(w, "Failed to get accepted invites", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Retrieved accepted invites\",\"count\":%d,\"from_user_id\":\"%s\"}", len(invites), fromUserID)
+
+	// Log details of each invite for debugging
+	for i, invite := range invites {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Invite details\",\"index\":%d,\"invite_id\":\"%s\",\"carpool_id\":\"%s\",\"to_user\":\"%s\",\"carpool_name\":\"%s\",\"status\":%d,\"updated_at\":\"%s\"}",
+			i, invite.ID, invite.CarpoolID, invite.ToUser, invite.CarpoolName, invite.Status, invite.UpdatedAt)
+	}
+
+	response := map[string]interface{}{
+		"invites": invites,
+		"count":   len(invites),
+	}
+
+	responseJSON, _ := json.Marshal(response)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Response prepared\",\"response\":%s}", string(responseJSON))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetAcceptedInvitesSentByUser completed successfully\",\"count\":%d}", len(invites))
 }

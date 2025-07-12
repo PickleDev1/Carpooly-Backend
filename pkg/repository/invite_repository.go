@@ -184,6 +184,103 @@ func (r *InviteRepository) GetUserInvites(ctx context.Context, email string) ([]
 	return invites, nil
 }
 
+// GetAcceptedInvitesSentByUser fetches all accepted invites sent by a specific user
+func (r *InviteRepository) GetAcceptedInvitesSentByUser(ctx context.Context, fromUserID uuid.UUID) ([]models.Invite, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Getting accepted invites sent by user\",\"from_user_id\":\"%s\"}", fromUserID)
+
+	// First, let's check if there are any invites at all for this user (any status)
+	checkQuery := `SELECT COUNT(*) FROM invites WHERE from_user = $1`
+	var totalInvites int
+	err := r.db.QueryRowContext(ctx, checkQuery, fromUserID).Scan(&totalInvites)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to check total invites count\",\"error\":\"%v\"}", err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Total invites sent by user (all statuses)\",\"count\":%d,\"from_user_id\":\"%s\"}", totalInvites, fromUserID)
+	}
+
+	// Check how many accepted invites there are
+	acceptedQuery := `SELECT COUNT(*) FROM invites WHERE from_user = $1 AND status = 1`
+	var acceptedInvites int
+	err = r.db.QueryRowContext(ctx, acceptedQuery, fromUserID).Scan(&acceptedInvites)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to check accepted invites count\",\"error\":\"%v\"}", err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Accepted invites sent by user\",\"count\":%d,\"from_user_id\":\"%s\"}", acceptedInvites, fromUserID)
+	}
+
+	// Check all statuses for this user
+	statusQuery := `SELECT status, COUNT(*) FROM invites WHERE from_user = $1 GROUP BY status`
+	statusRows, err := r.db.QueryContext(ctx, statusQuery, fromUserID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to check invite statuses\",\"error\":\"%v\"}", err)
+	} else {
+		defer statusRows.Close()
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Invite status breakdown for user\",\"from_user_id\":\"%s\"}", fromUserID)
+		for statusRows.Next() {
+			var status int
+			var count int
+			if statusRows.Scan(&status, &count) == nil {
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Status count\",\"status\":%d,\"count\":%d}", status, count)
+			}
+		}
+	}
+
+	query := `
+        SELECT 
+            i.id,
+            i.carpool_id,
+            i.from_user,
+            i.to_user_email,
+            i.status,
+            i.created_at,
+            i.updated_at,
+            c.carpool_name,
+            u.email as sender_email
+        FROM invites i
+        JOIN carpools c ON i.carpool_id = c.id
+        JOIN users u ON i.from_user = u.id
+        WHERE i.from_user = $1 AND i.status = 1
+        ORDER BY i.updated_at DESC
+    `
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing main query\",\"query\":\"%s\",\"from_user_id\":\"%s\"}",
+		query, fromUserID)
+
+	rows, err := r.db.QueryContext(ctx, query, fromUserID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Database query failed\",\"error\":\"%v\"}", err)
+		return nil, fmt.Errorf("failed to get accepted invites: %v", err)
+	}
+	defer rows.Close()
+
+	var invites []models.Invite
+	for rows.Next() {
+		var invite models.Invite
+		err := rows.Scan(
+			&invite.ID,
+			&invite.CarpoolID,
+			&invite.FromUser,
+			&invite.ToUser,
+			&invite.Status,
+			&invite.CreatedAt,
+			&invite.UpdatedAt,
+			&invite.CarpoolName,
+			&invite.SenderEmail,
+		)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan invite\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to scan invite: %v", err)
+		}
+		invites = append(invites, invite)
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Found accepted invite\",\"invite_id\":\"%s\",\"to_user\":\"%s\",\"carpool_name\":\"%s\"}",
+			invite.ID, invite.ToUser, invite.CarpoolName)
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Retrieved accepted invites\",\"count\":%d,\"from_user_id\":\"%s\"}",
+		len(invites), fromUserID)
+	return invites, nil
+}
+
 func (r *InviteRepository) UpdateInviteStatus(ctx context.Context, inviteID uuid.UUID, status int) error {
 	query := `
                 UPDATE invites
