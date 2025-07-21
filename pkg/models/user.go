@@ -1,24 +1,25 @@
 package models
 
 import (
+	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
 )
 
 type User struct {
-	ID                     uuid.UUID `json:"id" db:"id"`
-	ClerkID                string    `json:"clerk_id" db:"clerk_id"`
-	Email                  string    `json:"email" db:"email"`
-	Name                   string    `json:"name" db:"name"`
-	DisplayName            string    `json:"display_name" db:"display_name"`
-	City                   string    `json:"city" db:"city"`
-	State                  string    `json:"state" db:"state"`
-	LocationSharingEnabled bool      `json:"location_sharing_enabled" db:"location_sharing_enabled"`
-	HomeLatitude           float64   `json:"home_latitude" db:"home_latitude"`
-	HomeLongitude          float64   `json:"home_longitude" db:"home_longitude"`
-	CreatedAt              time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at" db:"updated_at"`
+	ID                     uuid.UUID      `json:"id" db:"id"`
+	ClerkID                string         `json:"clerk_id" db:"clerk_id"`
+	Email                  string         `json:"email" db:"email"`
+	Name                   string         `json:"name" db:"name"`
+	DisplayName            sql.NullString `json:"display_name" db:"display_name"`
+	City                   sql.NullString `json:"city" db:"city"`
+	State                  sql.NullString `json:"state" db:"state"`
+	LocationSharingEnabled bool           `json:"location_sharing_enabled" db:"location_sharing_enabled"`
+	HomeLatitude           float64        `json:"home_latitude" db:"home_latitude"`
+	HomeLongitude          float64        `json:"home_longitude" db:"home_longitude"`
+	CreatedAt              time.Time      `json:"created_at" db:"created_at"`
+	UpdatedAt              time.Time      `json:"updated_at" db:"updated_at"`
 }
 
 type CreateUserRequest struct {

@@ -38,7 +38,7 @@ func (r *CarPoolRepository) CreateCarPool(ctx context.Context, carpool *models.C
 	err = tx.QueryRowContext(
 		ctx, query,
 		carpool.CreatorID, carpool.CarpoolName, carpool.Status,
-		carpool.RecurringOption, carpool.AvailableSeats, carpool.DestinationAddress, carpool.TotalSeats,
+		carpool.RecurringOption, carpool.AvailableSeats, carpool.DestinationAddress, carpool.Seats,
 	).Scan(&carpool.ID, &carpool.CreatedAt, &carpool.UpdatedAt)
 
 	if err != nil {
@@ -89,13 +89,12 @@ func (r *CarPoolRepository) GetCarPool(ctx context.Context, carpoolID uuid.UUID)
 		&carpool.RecurringOption,
 		&carpool.AvailableSeats,
 		&carpool.DestinationAddress,
-		&carpool.TotalSeats,
+		&carpool.Seats,
 		&carpool.CreatedAt,
 		&carpool.UpdatedAt,
 	)
 
-	// Set the legacy Seats field to match TotalSeats
-	carpool.Seats = carpool.TotalSeats
+	// No need to set legacy Seats field
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -214,15 +213,14 @@ func (r *CarPoolRepository) GetCarpoolsByCreatorID(ctx context.Context, creatorI
 			&carpool.RecurringOption,
 			&carpool.AvailableSeats,
 			&carpool.DestinationAddress,
-			&carpool.TotalSeats,
+			&carpool.Seats,
 			&carpool.CreatedAt,
 			&carpool.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan carpool: %v", err)
 		}
-		// Set the legacy Seats field to match TotalSeats
-		carpool.Seats = carpool.TotalSeats
+		// No need to set legacy Seats field
 		carpools = append(carpools, carpool)
 	}
 
@@ -230,6 +228,7 @@ func (r *CarPoolRepository) GetCarpoolsByCreatorID(ctx context.Context, creatorI
 }
 
 func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUID) ([]models.Carpool, error) {
+	log.Printf("[GetUserCarpools-Repo] Called for userID: %s", userID)
 	var carpools []models.Carpool
 
 	// Join carpools and carpool_members tables to get carpools where the user is a member
@@ -238,11 +237,12 @@ func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUI
                 FROM carpools c
                 JOIN carpool_members cm ON c.id = cm.carpool_id
                 WHERE cm.user_id = $1
-
     `
 
+	log.Printf("[GetUserCarpools-Repo] Executing query: %s with userID: %s", query, userID)
 	rows, err := r.db.QueryContext(ctx, query, userID)
 	if err != nil {
+		log.Printf("[GetUserCarpools-Repo] ERROR: Query failed for userID %s: %v", userID, err)
 		return nil, fmt.Errorf("failed to get user carpools: %w", err)
 	}
 	defer rows.Close()
@@ -257,22 +257,24 @@ func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUI
 			&carpool.RecurringOption,
 			&carpool.AvailableSeats,
 			&carpool.DestinationAddress,
-			&carpool.TotalSeats,
+			&carpool.Seats,
 			&carpool.CreatedAt,
 			&carpool.UpdatedAt,
 		)
 		if err != nil {
+			log.Printf("[GetUserCarpools-Repo] ERROR: Failed to scan carpool row for userID %s: %v", userID, err)
 			return nil, fmt.Errorf("failed to scan carpool: %w", err)
 		}
-		// Set the legacy Seats field to match TotalSeats
-		carpool.Seats = carpool.TotalSeats
+		log.Printf("[GetUserCarpools-Repo] Scanned carpool: %+v", carpool)
 		carpools = append(carpools, carpool)
 	}
 
 	if err := rows.Err(); err != nil {
+		log.Printf("[GetUserCarpools-Repo] ERROR: Rows iteration error for userID %s: %v", userID, err)
 		return nil, fmt.Errorf("failed to iterate over carpool rows: %w", err)
 	}
 
+	log.Printf("[GetUserCarpools-Repo] Returning %d carpools for userID: %s", len(carpools), userID)
 	return carpools, nil
 }
 
@@ -478,4 +480,14 @@ func (r *CarPoolRepository) UpdateCarPool(ctx context.Context, carpoolID uuid.UU
 	`
 	_, err := r.db.ExecContext(ctx, query, availableSeatsForOthers, totalSeats, carpoolID)
 	return err
+}
+
+// IsUserMemberOfCarpool checks if a user is a member of a carpool
+func (r *CarPoolRepository) IsUserMemberOfCarpool(ctx context.Context, carpoolID, userID uuid.UUID) (bool, error) {
+	var isMember bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM carpool_members WHERE carpool_id = $1 AND user_id = $2)`, carpoolID, userID).Scan(&isMember)
+	if err != nil {
+		return false, err
+	}
+	return isMember, nil
 }

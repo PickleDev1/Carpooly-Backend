@@ -138,7 +138,7 @@ func setupClerk() {
 	clerk.SetKey(clerkSecretKey)
 }
 
-func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler, scheduleHandler *handlers.CarpoolScheduleHandler, locationHandler *handlers.LocationHandler) *mux.Router {
+func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler, scheduleHandler *handlers.CarpoolScheduleHandler, locationHandler *handlers.LocationHandler, inviteLinkHandler *handlers.InviteLinkHandler) *mux.Router {
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Setting up router\"}")
 
 	r := mux.NewRouter()
@@ -171,6 +171,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	r.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.GetCarpoolSchedules).Methods("GET", "OPTIONS")
 	r.HandleFunc("/schedules/{scheduleID}", scheduleHandler.GetScheduleByID).Methods("GET", "OPTIONS")
 	r.HandleFunc("/carpools/{carpoolID}/schedules", scheduleHandler.UpdateSchedule).Methods("PUT", "OPTIONS")
+	r.HandleFunc("/api/invite/{code}", inviteLinkHandler.GetInviteLink).Methods("GET")
 
 	// Protected routes
 	protected := r.PathPrefix("/api").Subrouter()
@@ -196,6 +197,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/carpools/search", carpoolHandler.SearchCarPools).Methods("POST")
 
 	protected.HandleFunc("/rides/active", carpoolRideHandler.GetActiveRides).Methods("GET")
+	protected.HandleFunc("/rides/completed", carpoolRideHandler.GetUserCompletedRides).Methods("GET")
 	protected.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
 	protected.HandleFunc("/carpools/rides/{rideID}/updateStatus", carpoolRideHandler.UpdateCarpoolRideStatus).Methods("PUT")
 	r.HandleFunc("/carpools/rides/{rideID}/driver", carpoolRideHandler.UpdateCarpoolRideDriver).Methods("PUT", "OPTIONS")
@@ -215,6 +217,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/invites/{id}", inviteHandler.GetInvite).Methods("GET")
 	protected.HandleFunc("/userinvites/{userID}", inviteHandler.GetUserInvites).Methods("GET")
 	protected.HandleFunc("/invites/{id}", inviteHandler.DeleteInvite).Methods("DELETE")
+	protected.HandleFunc("/invite/{code}/join", inviteLinkHandler.JoinViaInviteLink).Methods("POST")
 
 	// Webhook endpoints
 	webhookRouter = r.PathPrefix("/api/webhooks").Subrouter()
@@ -228,6 +231,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 
 	protected.HandleFunc("/carpools/{carpoolID}/members", carpoolHandler.AddCarpoolMemberAPI).Methods("POST")
 	protected.HandleFunc("/carpools/{carpoolID}/add-to-future-rides", carpoolHandler.AddUserToFutureRidesAPI).Methods("POST")
+	protected.HandleFunc("/carpools/{carpoolID}/invite-link", inviteLinkHandler.CreateInviteLink).Methods("POST")
 
 	protected.HandleFunc("/location/update/{rideID}", locationHandler.UpdateLocation).Methods("POST")
 	protected.HandleFunc("/location/latest/{userID}/{rideID}", locationHandler.GetLatestLocation).Methods("GET")
@@ -308,6 +312,7 @@ func main() {
 	carpoolRideRepo := repository.NewCarPoolRideRepository(db)
 	scheduleRepo := repository.NewCarpoolScheduleRepository(db)
 	locationRepo := repository.NewLocationRepository(db)
+	inviteLinkRepo := repository.NewInviteLinkRepository(db)
 
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(userRepo)
@@ -317,8 +322,9 @@ func main() {
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
 	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo, carpoolRideRepo, userRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo, userRepo)
+	inviteLinkHandler := handlers.NewInviteLinkHandler(inviteLinkRepo, userRepo, carpoolRepo)
 
-	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler, locationHandler)
+	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler, locationHandler, inviteLinkHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"strconv"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
@@ -163,7 +165,7 @@ func (h *CarPoolRideHandler) GetCarpoolRide(w http.ResponseWriter, r *http.Reque
 	// Log participant details for debugging
 	for i, participant := range ride.Participants {
 		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Participant details\",\"ride_id\":\"%s\",\"participant_index\":%d,\"participant_id\":\"%s\",\"display_name\":\"%s\"}",
-			rideID, i, participant.ID, participant.DisplayName)
+			rideID, i, participant.ID, participant.DisplayName.String)
 	}
 
 	if err := json.NewEncoder(w).Encode(ride); err != nil {
@@ -752,4 +754,76 @@ func (h *CarPoolRideHandler) AddParticipantToRide(w http.ResponseWriter, r *http
 	duration := time.Since(startTime)
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"AddParticipantToRide completed\",\"duration_ms\":%d,\"ride_id\":\"%s\",\"user_id\":\"%s\",\"clerk_id\":\"%s\"}",
 		duration.Milliseconds(), rideID, userID, clerkID)
+}
+
+// GetUserCompletedRides returns all completed rides for the authenticated user
+func (h *CarPoolRideHandler) GetUserCompletedRides(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	log.Printf("🚀 [REQ-COMPLETED] ====== GetUserCompletedRides START ======")
+	log.Printf("🚀 [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"GetUserCompletedRides called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	ctx := r.Context()
+
+	// Get Clerk ID from context for authentication
+	clerkID, ok := middleware.GetClerkIDFromContext(ctx)
+	if !ok {
+		log.Printf("❌ [REQ-COMPLETED] {\"severity\":\"ERROR\",\"message\":\"Unauthorized: No Clerk ID in context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("✅ [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"Authenticated user\",\"clerk_id\":\"%s\"}", clerkID)
+
+	// Convert Clerk ID to user UUID
+	userID, err := h.userRepo.GetUserIDByClerkID(ctx, clerkID)
+	if err != nil {
+		log.Printf("❌ [REQ-COMPLETED] {\"severity\":\"ERROR\",\"message\":\"Failed to get user UUID from Clerk ID\",\"clerk_id\":\"%s\",\"error\":%q}", clerkID, err.Error())
+		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("🔍 [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"Resolved user ID\",\"clerk_id\":\"%s\",\"user_id\":\"%s\"}", clerkID, userID.String())
+
+	// Get limit from query parameters (default 50, max 200)
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	log.Printf("🔍 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Completed rides limit\",\"limit\":%d}", limit)
+
+	// Get completed rides
+	rides, err := h.carpoolRideRepo.GetUserCompletedRides(ctx, userID, limit)
+	if err != nil {
+		log.Printf("❌ [REQ-COMPLETED] {\"severity\":\"ERROR\",\"message\":\"Failed to get completed rides\",\"user_id\":\"%s\",\"error\":%q}", userID.String(), err.Error())
+		http.Error(w, "Failed to get completed rides", http.StatusInternalServerError)
+		return
+	}
+
+	// Ensure rides is never null in response
+	if rides == nil {
+		rides = []models.CarpoolRide{}
+	}
+
+	// Always fill miles_saved, never return CalculatedDistance
+	for i := range rides {
+		if rides[i].MilesSaved == nil && rides[i].CalculatedDistance != nil {
+			rides[i].MilesSaved = rides[i].CalculatedDistance
+		}
+		rides[i].CalculatedDistance = nil // Remove CalculatedDistance from response
+	}
+
+	log.Printf("📊 [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"Retrieved completed rides\",\"user_id\":\"%s\",\"count\":%d}", userID.String(), len(rides))
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(rides); err != nil {
+		log.Printf("❌ [REQ-COMPLETED] {\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"error\":%v}", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("🎉 [REQ-COMPLETED] ====== GetUserCompletedRides SUCCESS ======")
+	log.Printf("🎉 [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"GetUserCompletedRides completed\",\"duration_ms\":%d,\"user_id\":\"%s\",\"count\":%d}",
+		duration.Milliseconds(), userID.String(), len(rides))
 }

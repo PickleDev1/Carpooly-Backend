@@ -370,11 +370,11 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 			Type:        "invite_accepted",
 			RelatedID:   &inviteID,
 			RelatedType: ptrString("invite"),
-			Description: ptrString(fmt.Sprintf("%s accepted your invite to join carpool: %s", user.DisplayName, carpoolName)),
+			Description: ptrString(fmt.Sprintf("%s accepted your invite to join carpool: %s", user.DisplayName.String, carpoolName)),
 			Data: map[string]interface{}{
 				"invite_id":     inviteID,
 				"accepted_by":   user.ID,
-				"accepted_name": user.DisplayName,
+				"accepted_name": user.DisplayName.String,
 				"carpool_id":    invite.CarpoolID,
 				"carpool_name":  carpoolName,
 			},
@@ -386,7 +386,7 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 			// Don't fail the entire request if notification creation fails
 		} else {
 			log.Printf("{\"severity\":\"INFO\",\"message\":\"Created notification for inviter\",\"inviter_id\":\"%s\",\"accepted_by\":\"%s\",\"carpool_name\":\"%s\"}",
-				invite.FromUser, user.DisplayName, carpoolName)
+				invite.FromUser, user.DisplayName.String, carpoolName)
 		}
 
 		// 4. Add activity for the user who accepted the invite
@@ -433,11 +433,11 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 				Type:        "invite_rejected",
 				RelatedID:   &inviteID,
 				RelatedType: ptrString("invite"),
-				Description: ptrString(fmt.Sprintf("%s declined your invite to join carpool: %s", user.DisplayName, carpoolName)),
+				Description: ptrString(fmt.Sprintf("%s declined your invite to join carpool: %s", user.DisplayName.String, carpoolName)),
 				Data: map[string]interface{}{
 					"invite_id":     inviteID,
 					"rejected_by":   user.ID,
-					"rejected_name": user.DisplayName,
+					"rejected_name": user.DisplayName.String,
 					"carpool_id":    invite.CarpoolID,
 					"carpool_name":  carpoolName,
 				},
@@ -448,7 +448,7 @@ func (h *InviteHandler) UpdateInviteStatus(w http.ResponseWriter, r *http.Reques
 				log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to create rejection notification for inviter\",\"inviter_id\":\"%s\",\"error\":\"%v\"}", invite.FromUser, err)
 			} else {
 				log.Printf("{\"severity\":\"INFO\",\"message\":\"Created rejection notification for inviter\",\"inviter_id\":\"%s\",\"rejected_by\":\"%s\",\"carpool_name\":\"%s\"}",
-					invite.FromUser, user.DisplayName, carpoolName)
+					invite.FromUser, user.DisplayName.String, carpoolName)
 			}
 
 			// Add activity for the user who rejected the invite

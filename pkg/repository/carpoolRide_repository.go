@@ -2,6 +2,7 @@ package repository
 
 import (
 	"car-backend/pkg/models"
+	"car-backend/pkg/utils"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -534,4 +535,98 @@ func (r *CarPoolRideRepository) AddParticipant(ctx context.Context, rideID uuid.
 		return fmt.Errorf("failed to update participants: %v", err)
 	}
 	return nil
+}
+
+// GetUserCompletedRides returns completed rides for a user, including calculated distance if needed
+func (r *CarPoolRideRepository) GetUserCompletedRides(ctx context.Context, userID uuid.UUID, limit int) ([]models.CarpoolRide, error) {
+	query := `
+        SELECT cr.id, cr.carpool_id, cr.driver_id, cr.start_time, cr.status, 
+               cr.location_lat, cr.location_lng, cr.miles_saved, cr.participants,
+               cr.created_at, cr.updated_at,
+               u.home_latitude, u.home_longitude
+        FROM carpool_rides cr
+        JOIN users u ON u.id = $1
+        WHERE cr.participants @> json_build_array(
+            json_build_object(
+                'id', $1::uuid
+            )
+        )::jsonb
+        AND cr.start_time < NOW()  -- Only rides that have passed
+        AND cr.status = 2  -- Only completed rides
+        ORDER BY cr.start_time DESC
+        LIMIT $2
+    `
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing query for user completed rides\",\"user_id\":\"%s\",\"limit\":%d}", userID, limit)
+
+	rows, err := r.db.QueryContext(ctx, query, userID, limit)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to query completed rides\",\"error\":%v}", err)
+		return nil, fmt.Errorf("failed to query completed rides: %v", err)
+	}
+	defer rows.Close()
+
+	var rides []models.CarpoolRide
+	for rows.Next() {
+		var ride models.CarpoolRide
+		var participantsJSON []byte
+		var locationLat, locationLng, milesSaved sql.NullFloat64
+		var driverID sql.NullString
+		var homeLat, homeLng sql.NullFloat64
+
+		err := rows.Scan(
+			&ride.ID,
+			&ride.CarpoolID,
+			&driverID,
+			&ride.StartTime,
+			&ride.Status,
+			&locationLat,
+			&locationLng,
+			&milesSaved,
+			&participantsJSON,
+			&ride.CreatedAt,
+			&ride.UpdatedAt,
+			&homeLat,
+			&homeLng,
+		)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan completed ride\",\"error\":%v}", err)
+			return nil, fmt.Errorf("failed to scan completed ride: %v", err)
+		}
+
+		// Convert NULL values to zero values
+		if locationLat.Valid {
+			ride.LocationLat = &locationLat.Float64
+		}
+		if locationLng.Valid {
+			ride.LocationLng = &locationLng.Float64
+		}
+		if milesSaved.Valid {
+			ride.MilesSaved = &milesSaved.Float64
+		}
+		if driverID.Valid {
+			parsedDriverID, _ := uuid.Parse(driverID.String)
+			ride.DriverID = &parsedDriverID
+		}
+
+		// Calculate distance if we have both home coordinates and ride location
+		if homeLat.Valid && homeLng.Valid && locationLat.Valid && locationLng.Valid {
+			distance := utils.CalculateDistance(homeLat.Float64, homeLng.Float64, locationLat.Float64, locationLng.Float64)
+			ride.CalculatedDistance = &distance
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Calculated distance for ride\",\"ride_id\":\"%s\",\"distance_miles\":%.2f}", ride.ID, distance)
+		} else {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Missing coordinates for distance calculation\",\"ride_id\":\"%s\",\"home_lat_valid\":%t,\"home_lng_valid\":%t,\"ride_lat_valid\":%t,\"ride_lng_valid\":%t}",
+				ride.ID, homeLat.Valid, homeLng.Valid, locationLat.Valid, locationLng.Valid)
+		}
+
+		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to unmarshal participants for completed ride\",\"error\":%v}", err)
+			return nil, fmt.Errorf("failed to unmarshal participants: %v", err)
+		}
+
+		rides = append(rides, ride)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Found completed rides\",\"user_id\":\"%s\",\"count\":%d}", userID, len(rides))
+	return rides, nil
 }

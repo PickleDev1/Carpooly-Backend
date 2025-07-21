@@ -12,6 +12,8 @@ import (
 
 	"car-backend/middleware"
 
+	"database/sql"
+
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -124,20 +126,20 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		newUser := &models.User{
 			ID:          uuid.New(),
 			ClerkID:     claims.Subject,
-			DisplayName: "",
-			City:        "",
-			State:       "",
+			DisplayName: sql.NullString{String: "", Valid: false},
+			City:        sql.NullString{String: "", Valid: false},
+			State:       sql.NullString{String: "", Valid: false},
 		}
 
 		// Set provided fields from the update request
 		if update.DisplayName != nil {
-			newUser.DisplayName = *update.DisplayName
+			newUser.DisplayName = sql.NullString{String: *update.DisplayName, Valid: *update.DisplayName != ""}
 		}
 		if update.City != nil {
-			newUser.City = *update.City
+			newUser.City = sql.NullString{String: *update.City, Valid: *update.City != ""}
 		}
 		if update.State != nil {
-			newUser.State = *update.State
+			newUser.State = sql.NullString{String: *update.State, Valid: *update.State != ""}
 		}
 		if update.LocationSharingEnabled != nil {
 			newUser.LocationSharingEnabled = *update.LocationSharingEnabled
@@ -181,7 +183,7 @@ func (h *UserHandler) AuthenticateUser(w http.ResponseWriter, r *http.Request) {
 		ID:          uuid.MustParse(userID),
 		Email:       userEmail,
 		Name:        userName,
-		DisplayName: userName, // Default display name to actual name
+		DisplayName: sql.NullString{String: userName, Valid: userName != ""}, // Default display name to actual name
 		// City and State can be updated later by the user
 	}
 
@@ -222,9 +224,9 @@ func (h *UserHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	user := &models.User{
 		ID:          uuid.New(),
 		ClerkID:     claims.Subject,
-		DisplayName: *profile.DisplayName,
-		City:        *profile.City,
-		State:       *profile.State,
+		DisplayName: sql.NullString{String: *profile.DisplayName, Valid: profile.DisplayName != nil && *profile.DisplayName != ""},
+		City:        sql.NullString{String: *profile.City, Valid: profile.City != nil && *profile.City != ""},
+		State:       sql.NullString{String: *profile.State, Valid: profile.State != nil && *profile.State != ""},
 	}
 
 	if err := h.userRepo.CreateUser(r.Context(), user); err != nil {
@@ -273,9 +275,9 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	newUser := &models.User{
 		Email:       user.Email,
 		Name:        user.Name,
-		DisplayName: user.DisplayName,
-		City:        user.City,
-		State:       user.State,
+		DisplayName: sql.NullString{String: user.DisplayName, Valid: user.DisplayName != ""},
+		City:        sql.NullString{String: user.City, Valid: user.City != ""},
+		State:       sql.NullString{String: user.State, Valid: user.State != ""},
 		ClerkID:     user.ClerkID,
 	}
 
@@ -475,7 +477,7 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Found user to delete\",\"user_id\":\"%s\",\"email\":\"%s\",\"display_name\":\"%s\"}",
-		userID, user.Email, user.DisplayName)
+		userID, user.Email, user.DisplayName.String)
 
 	// Delete the user
 	err = h.userRepo.DeleteUser(ctx, userID)

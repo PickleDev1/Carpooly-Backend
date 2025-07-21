@@ -1,6 +1,7 @@
 package models
 
 import (
+	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
@@ -8,17 +9,16 @@ import (
 
 // Carpool represents a carpool group
 type Carpool struct {
-	ID                 uuid.UUID `json:"id" db:"id"`
-	CreatorID          uuid.UUID `json:"creator_id" db:"creator_id"`
-	CarpoolName        string    `json:"carpool_name" db:"carpool_name"`
-	Status             bool      `json:"status" db:"status"`
-	RecurringOption    string    `json:"recurring_option" db:"recurring_option"`
-	AvailableSeats     int       `json:"available_seats" db:"available_seats"` // Seats available for others (excluding creator)
-	TotalSeats         int       `json:"total_seats" db:"seats"`               // Total capacity including creator
-	DestinationAddress string    `json:"destination_address" db:"destination_address"`
-	Seats              int       `json:"seats" db:"seats"` // Legacy field - same as TotalSeats
-	CreatedAt          time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at" db:"updated_at"`
+	ID                 uuid.UUID      `json:"id" db:"id"`
+	CreatorID          uuid.UUID      `json:"creator_id" db:"creator_id"`
+	CarpoolName        string         `json:"carpool_name" db:"carpool_name"`
+	Status             bool           `json:"status" db:"status"`
+	RecurringOption    sql.NullString `json:"recurring_option" db:"recurring_option"`
+	AvailableSeats     int            `json:"available_seats" db:"available_seats"` // Seats available for others (excluding creator)
+	DestinationAddress string         `json:"destination_address" db:"destination_address"`
+	Seats              int            `json:"seats" db:"seats"` // Legacy field - same as TotalSeats
+	CreatedAt          time.Time      `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at" db:"updated_at"`
 }
 
 // CarpoolMember represents a member of a carpool
@@ -32,17 +32,18 @@ type CarpoolMember struct {
 
 // CarpoolRide represents a specific ride instance
 type CarpoolRide struct {
-	ID           uuid.UUID  `json:"id"`
-	CarpoolID    uuid.UUID  `json:"carpool_id"`
-	DriverID     *uuid.UUID `json:"driver_id,omitempty"` // Optional - can be NULL
-	StartTime    time.Time  `json:"start_time"`
-	Status       int        `json:"status"`
-	LocationLat  *float64   `json:"location_lat,omitempty"` // Optional - can be NULL
-	LocationLng  *float64   `json:"location_lng,omitempty"` // Optional - can be NULL
-	MilesSaved   *float64   `json:"miles_saved,omitempty"`  // Optional - can be NULL
-	Participants []User     `json:"participants"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID                 uuid.UUID  `json:"id"`
+	CarpoolID          uuid.UUID  `json:"carpool_id"`
+	DriverID           *uuid.UUID `json:"driver_id,omitempty"` // Optional - can be NULL
+	StartTime          time.Time  `json:"start_time"`
+	Status             int        `json:"status"`
+	LocationLat        *float64   `json:"location_lat,omitempty"` // Optional - can be NULL
+	LocationLng        *float64   `json:"location_lng,omitempty"` // Optional - can be NULL
+	MilesSaved         *float64   `json:"miles_saved,omitempty"`  // Optional - can be NULL
+	CalculatedDistance *float64   `json:"distance,omitempty"`     // Distance in miles for frontend analytics
+	Participants       []User     `json:"participants"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // Stop represents a stop in a carpool ride

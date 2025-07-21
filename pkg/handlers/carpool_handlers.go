@@ -70,11 +70,10 @@ func (h *CarPoolHandler) CreateCarPool(w http.ResponseWriter, r *http.Request) {
 		CreatorID:          userID, // Use actual userID from context
 		CarpoolName:        req.CarpoolName,
 		Status:             false, // Default status
-		RecurringOption:    req.RecurringOption,
+		RecurringOption:    sql.NullString{String: req.RecurringOption, Valid: req.RecurringOption != ""},
 		AvailableSeats:     availableSeatsForOthers, // Correct value
-		TotalSeats:         totalSeats,              // Total capacity including creator
+		Seats:              totalSeats,
 		DestinationAddress: req.DestinationAddress,
-		Seats:              totalSeats, // Legacy field - same as TotalSeats
 	}
 
 	if err := h.carpoolRepo.CreateCarPool(r.Context(), carpool); err != nil {
@@ -300,36 +299,55 @@ func (h *CarPoolHandler) GetCreatorCarpools(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	// Get Clerk ID from context (this stays as string)
-	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized - No clerk ID in context", http.StatusUnauthorized)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[GetUserCarpools] PANIC: %v", r)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}()
+	log.Printf("[GetUserCarpools] TOP OF HANDLER - Handler entered")
+	vars := mux.Vars(r)
+	userUUIDStr := vars["userID"]
+	log.Printf("[GetUserCarpools] userID param from URL: %v", userUUIDStr)
+	if userUUIDStr == "" {
+		log.Printf("[GetUserCarpools] ERROR: userUUID is empty")
+		http.Error(w, "User ID is required", http.StatusBadRequest)
 		return
 	}
 
-	// Get the corresponding UUID from users table using userRepo
-	userUUID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	var userUUID uuid.UUID
+	userUUID, err := uuid.Parse(userUUIDStr)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user UUID\",\"error\":\"%v\"}", err)
-		http.Error(w, "Failed to get user information", http.StatusInternalServerError)
-		return
+		// Not a UUID, try as Clerk ID
+		log.Printf("[GetUserCarpools] userID is not a UUID, trying as Clerk ID: %s", userUUIDStr)
+		userUUID, err = h.userRepo.GetUserIDByClerkID(r.Context(), userUUIDStr)
+		if err != nil {
+			log.Printf("[GetUserCarpools] ERROR: Could not resolve Clerk ID %s to UUID: %v", userUUIDStr, err)
+			http.Error(w, "Invalid user ID", http.StatusBadRequest)
+			return
+		}
+		log.Printf("[GetUserCarpools] Clerk ID %s resolved to UUID %s", userUUIDStr, userUUID)
 	}
-
-	// Print the request
-	log.Printf("Received GetUserCarpools request for userID: %s", userUUID)
 
 	carpools, err := h.carpoolRepo.GetUserCarpools(r.Context(), userUUID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get user carpools: %v", err), http.StatusInternalServerError)
+		log.Printf("[GetUserCarpools] ERROR: Failed to get user carpools for userID %s: %v", userUUID, err)
+		http.Error(w, "Failed to get user carpools", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("[GetUserCarpools] Retrieved %d carpools for userID: %s", len(carpools), userUUID)
 
-	// Print the response
-	log.Printf("Retrieved carpools for userID: %s: %+v", userUUID, carpools)
+	for i, carpool := range carpools {
+		log.Printf("[GetUserCarpools] Carpool %d: ID=%s, CreatorID=%s, Name=%s", i, carpool.ID, carpool.CreatorID, carpool.CarpoolName)
+	}
 
-	json.NewEncoder(w).Encode(carpools)
+	log.Printf("[GetUserCarpools] Sending response for userID: %s", userUUID)
+	if err := json.NewEncoder(w).Encode(carpools); err != nil {
+		log.Printf("[GetUserCarpools] ERROR: Failed to encode response for userID %s: %v", userUUID, err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[GetUserCarpools] Handler completed for userID: %s", userUUIDStr)
 }
 
 func (h *CarPoolHandler) GetCarpoolMembers(w http.ResponseWriter, r *http.Request) {

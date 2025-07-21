@@ -3,6 +3,7 @@ package handlers
 import (
 	"car-backend/pkg/models"
 	"car-backend/pkg/repository"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -53,7 +54,7 @@ func (h *WebhookHandler) HandleClerkWebhook(w http.ResponseWriter, r *http.Reque
 			ClerkID:     event.Data.ID,
 			Email:       event.Data.EmailAddresses[0].EmailAddress,
 			Name:        event.Data.FirstName + " " + event.Data.LastName,
-			DisplayName: event.Data.FirstName,
+			DisplayName: sql.NullString{String: event.Data.FirstName, Valid: event.Data.FirstName != ""},
 		}
 
 		if err := h.userRepo.CreateUser(r.Context(), user); err != nil {
