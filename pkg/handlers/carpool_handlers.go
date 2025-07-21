@@ -18,14 +18,16 @@ import (
 )
 
 type CarPoolHandler struct {
-	carpoolRepo *repository.CarPoolRepository
-	userRepo    *repository.UserRepository
+	carpoolRepo  *repository.CarPoolRepository
+	userRepo     *repository.UserRepository
+	scheduleRepo *repository.CarpoolScheduleRepository // Add this line
 }
 
-func NewCarPoolHandler(carpoolRepo *repository.CarPoolRepository, userRepo *repository.UserRepository) *CarPoolHandler {
+func NewCarPoolHandler(carpoolRepo *repository.CarPoolRepository, userRepo *repository.UserRepository, scheduleRepo *repository.CarpoolScheduleRepository) *CarPoolHandler {
 	return &CarPoolHandler{
-		carpoolRepo: carpoolRepo,
-		userRepo:    userRepo,
+		carpoolRepo:  carpoolRepo,
+		userRepo:     userRepo,
+		scheduleRepo: scheduleRepo, // Add this line
 	}
 }
 
@@ -118,7 +120,37 @@ func (h *CarPoolHandler) GetCarPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(carpool)
+	// Fetch the first schedule (if any) for this carpool
+	schedules, err := h.scheduleRepo.GetCarpoolSchedules(r.Context(), carpool.ID)
+	var scheduleObj *struct {
+		StartDate string `json:"start_date"`
+		StartTime string `json:"start_time"`
+	}
+	if err == nil && len(schedules) > 0 {
+		first := schedules[0]
+		scheduleObj = &struct {
+			StartDate string `json:"start_date"`
+			StartTime string `json:"start_time"`
+		}{
+			StartDate: first.StartDate.Format("2006-01-02"),
+			StartTime: first.StartTime.In(time.Local).Format("15:04"),
+		}
+	}
+
+	// Build response with schedule
+	type carpoolWithSchedule struct {
+		models.Carpool
+		Schedule *struct {
+			StartDate string `json:"start_date"`
+			StartTime string `json:"start_time"`
+		} `json:"schedule,omitempty"`
+	}
+	response := carpoolWithSchedule{
+		Carpool:  *carpool,
+		Schedule: scheduleObj,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func (h *CarPoolHandler) UpdateCarPool(w http.ResponseWriter, r *http.Request) {
@@ -337,12 +369,41 @@ func (h *CarPoolHandler) GetUserCarpools(w http.ResponseWriter, r *http.Request)
 	}
 	log.Printf("[GetUserCarpools] Retrieved %d carpools for userID: %s", len(carpools), userUUID)
 
+	// For each carpool, fetch the first schedule (if any) and add it to the response
+	type carpoolWithSchedule struct {
+		models.Carpool
+		Schedule *struct {
+			StartDate string `json:"start_date"`
+			StartTime string `json:"start_time"`
+		} `json:"schedule,omitempty"`
+	}
+
+	var response []carpoolWithSchedule
 	for i, carpool := range carpools {
 		log.Printf("[GetUserCarpools] Carpool %d: ID=%s, CreatorID=%s, Name=%s", i, carpool.ID, carpool.CreatorID, carpool.CarpoolName)
+		schedules, err := h.scheduleRepo.GetCarpoolSchedules(r.Context(), carpool.ID)
+		var scheduleObj *struct {
+			StartDate string `json:"start_date"`
+			StartTime string `json:"start_time"`
+		}
+		if err == nil && len(schedules) > 0 {
+			first := schedules[0]
+			scheduleObj = &struct {
+				StartDate string `json:"start_date"`
+				StartTime string `json:"start_time"`
+			}{
+				StartDate: first.StartDate.Format("2006-01-02"),
+				StartTime: first.StartTime.In(time.Local).Format("15:04"),
+			}
+		}
+		response = append(response, carpoolWithSchedule{
+			Carpool:  carpool,
+			Schedule: scheduleObj,
+		})
 	}
 
 	log.Printf("[GetUserCarpools] Sending response for userID: %s", userUUID)
-	if err := json.NewEncoder(w).Encode(carpools); err != nil {
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("[GetUserCarpools] ERROR: Failed to encode response for userID %s: %v", userUUID, err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return

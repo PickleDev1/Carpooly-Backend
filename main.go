@@ -316,7 +316,7 @@ func main() {
 
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(userRepo)
-	carpoolHandler := handlers.NewCarPoolHandler(carpoolRepo, userRepo)
+	carpoolHandler := handlers.NewCarPoolHandler(carpoolRepo, userRepo, scheduleRepo)
 	inviteHandler := handlers.NewInviteHandler(inviteRepo, userRepo, carpoolRepo)
 	carpoolRideHandler := handlers.NewCarPoolRideHandler(carpoolRideRepo, userRepo, carpoolRepo)
 	webhookHandler := handlers.NewWebhookHandler(userRepo)
