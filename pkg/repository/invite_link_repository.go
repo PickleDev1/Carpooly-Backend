@@ -175,6 +175,14 @@ func (r *InviteLinkRepository) JoinViaInviteLink(ctx context.Context, inviteCode
 		return fmt.Errorf("failed to add user to carpool: %v", err)
 	}
 
+	// Add user to all future rides as a participant
+	carpoolRepo := NewCarPoolRepository(r.db)
+	err = carpoolRepo.AddUserToFutureRides(ctx, inviteLink.CarpoolID, userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to add user to future rides via invite link\",\"carpool_id\":\"%s\",\"user_id\":\"%s\",\"error\":\"%v\"}", inviteLink.CarpoolID, userID, err)
+		// Do not return error, just log it
+	}
+
 	// Increment current uses
 	_, err = tx.ExecContext(ctx,
 		"UPDATE invite_links SET current_uses = current_uses + 1 WHERE id = $1",
