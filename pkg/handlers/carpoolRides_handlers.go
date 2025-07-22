@@ -763,6 +763,10 @@ func (h *CarPoolRideHandler) GetUserCompletedRides(w http.ResponseWriter, r *htt
 	log.Printf("🚀 [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"GetUserCompletedRides called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
 		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
 
+	// Log all query parameters for debugging
+	queryParams := r.URL.Query()
+	log.Printf("🔍 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Query parameters\",\"params\":%v}", queryParams)
+
 	ctx := r.Context()
 
 	// Get Clerk ID from context for authentication
@@ -792,6 +796,9 @@ func (h *CarPoolRideHandler) GetUserCompletedRides(w http.ResponseWriter, r *htt
 	}
 	log.Printf("🔍 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Completed rides limit\",\"limit\":%d}", limit)
 
+	// Log before calling repository
+	log.Printf("🔍 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Calling repository for completed rides\",\"user_id\":\"%s\",\"limit\":%d}", userID.String(), limit)
+
 	// Get completed rides
 	rides, err := h.carpoolRideRepo.GetUserCompletedRides(ctx, userID, limit)
 	if err != nil {
@@ -800,20 +807,28 @@ func (h *CarPoolRideHandler) GetUserCompletedRides(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Log the raw response from repository
+	log.Printf("📊 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Raw repository response\",\"user_id\":\"%s\",\"rides_count\":%d,\"rides_nil\":%t}", userID.String(), len(rides), rides == nil)
+
 	// Ensure rides is never null in response
 	if rides == nil {
 		rides = []models.CarpoolRide{}
+		log.Printf("📊 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Set rides to empty array (was nil)\"}")
 	}
 
 	// Always fill miles_saved, never return CalculatedDistance
 	for i := range rides {
 		if rides[i].MilesSaved == nil && rides[i].CalculatedDistance != nil {
 			rides[i].MilesSaved = rides[i].CalculatedDistance
+			log.Printf("📊 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Using calculated distance for miles_saved\",\"ride_id\":\"%s\",\"distance\":%.2f}", rides[i].ID, *rides[i].CalculatedDistance)
 		}
 		rides[i].CalculatedDistance = nil // Remove CalculatedDistance from response
 	}
 
 	log.Printf("📊 [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"Retrieved completed rides\",\"user_id\":\"%s\",\"count\":%d}", userID.String(), len(rides))
+
+	// Log response details before encoding
+	log.Printf("📊 [REQ-COMPLETED] {\"severity\":\"DEBUG\",\"message\":\"Response details\",\"user_id\":\"%s\",\"final_count\":%d,\"response_type\":\"%T\"}", userID.String(), len(rides), rides)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(rides); err != nil {

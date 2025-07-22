@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -539,6 +540,93 @@ func (r *CarPoolRideRepository) AddParticipant(ctx context.Context, rideID uuid.
 
 // GetUserCompletedRides returns completed rides for a user, including calculated distance if needed
 func (r *CarPoolRideRepository) GetUserCompletedRides(ctx context.Context, userID uuid.UUID, limit int) ([]models.CarpoolRide, error) {
+	// Debug: Check if there are any completed rides in the database at all
+	var totalCompletedRides int
+	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM carpool_rides WHERE status = 2").Scan(&totalCompletedRides)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to count total completed rides\",\"error\":%v}", err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Total completed rides in database\",\"count\":%d}", totalCompletedRides)
+	}
+
+	// Debug: Check total rides by status
+	var activeRides, pendingRides int
+	err = r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM carpool_rides WHERE status = 1").Scan(&activeRides)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to count active rides\",\"error\":%v}", err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Total active rides in database\",\"count\":%d}", activeRides)
+	}
+
+	err = r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM carpool_rides WHERE status = 0").Scan(&pendingRides)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to count pending rides\",\"error\":%v}", err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Total pending rides in database\",\"count\":%d}", pendingRides)
+	}
+
+	// Debug: Check for rides that should be considered completed (more than 1 hour past start time)
+	var pastRidesCount int
+	err = r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM carpool_rides 
+		WHERE start_time < NOW() - INTERVAL '1 hour'
+	`).Scan(&pastRidesCount)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to count rides past 1 hour\",\"error\":%v}", err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Rides more than 1 hour past start time\",\"count\":%d}", pastRidesCount)
+	}
+
+	// Debug: Show some example rides that should be considered completed
+	if pastRidesCount > 0 {
+		rows, err := r.db.QueryContext(ctx, `
+			SELECT id, carpool_id, start_time, status 
+			FROM carpool_rides 
+			WHERE start_time < NOW() - INTERVAL '1 hour'
+			ORDER BY start_time DESC
+			LIMIT 5
+		`)
+		if err != nil {
+			log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to get example past rides\",\"error\":%v}", err)
+		} else {
+			defer rows.Close()
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Example rides more than 1 hour past start time:\"}")
+			for rows.Next() {
+				var rideID, carpoolID uuid.UUID
+				var startTime time.Time
+				var status int
+				if err := rows.Scan(&rideID, &carpoolID, &startTime, &status); err == nil {
+					log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Past ride\",\"ride_id\":\"%s\",\"carpool_id\":\"%s\",\"start_time\":\"%v\",\"status\":%d}", rideID, carpoolID, startTime, status)
+				}
+			}
+		}
+	}
+
+	// Debug: Check if there are any rides for this user at all
+	var userRidesCount int
+	err = r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM carpool_rides cr
+		WHERE cr.participants @> json_build_array(json_build_object('id', $1::uuid))::jsonb
+	`, userID).Scan(&userRidesCount)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to count user rides\",\"user_id\":\"%s\",\"error\":%v}", userID, err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Total rides for user\",\"user_id\":\"%s\",\"count\":%d}", userID, userRidesCount)
+	}
+
+	// Debug: Check if there are any completed rides for this user (more than 1 hour past start time)
+	var userCompletedRidesCount int
+	err = r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM carpool_rides cr
+		WHERE cr.participants @> json_build_array(json_build_object('id', $1::uuid))::jsonb
+		AND cr.start_time < NOW() - INTERVAL '1 hour'
+	`, userID).Scan(&userCompletedRidesCount)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to count user completed rides\",\"user_id\":\"%s\",\"error\":%v}", userID, err)
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Total completed rides for user (1+ hour past)\",\"user_id\":\"%s\",\"count\":%d}", userID, userCompletedRidesCount)
+	}
+
 	query := `
         SELECT cr.id, cr.carpool_id, cr.driver_id, cr.start_time, cr.status, 
                cr.location_lat, cr.location_lng, cr.miles_saved, cr.participants,
@@ -551,23 +639,28 @@ func (r *CarPoolRideRepository) GetUserCompletedRides(ctx context.Context, userI
                 'id', $1::uuid
             )
         )::jsonb
-        AND cr.start_time < NOW()  -- Only rides that have passed
-        AND cr.status = 2  -- Only completed rides
+        AND cr.start_time < NOW() - INTERVAL '1 hour'  -- Only rides that are more than 1 hour past start time
         ORDER BY cr.start_time DESC
         LIMIT $2
     `
 
-	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing query for user completed rides\",\"user_id\":\"%s\",\"limit\":%d}", userID, limit)
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Executing query for user completed rides\",\"user_id\":\"%s\",\"limit\":%d,\"query\":\"%s\"}", userID, limit, query)
 
 	rows, err := r.db.QueryContext(ctx, query, userID, limit)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to query completed rides\",\"error\":%v}", err)
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to query completed rides\",\"user_id\":\"%s\",\"error\":%v}", userID, err)
 		return nil, fmt.Errorf("failed to query completed rides: %v", err)
 	}
 	defer rows.Close()
 
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Query executed successfully, starting to scan rows\",\"user_id\":\"%s\"}", userID)
+
 	var rides []models.CarpoolRide
+	rowCount := 0
 	for rows.Next() {
+		rowCount++
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Scanning row\",\"user_id\":\"%s\",\"row_number\":%d}", userID, rowCount)
+
 		var ride models.CarpoolRide
 		var participantsJSON []byte
 		var locationLat, locationLng, milesSaved sql.NullFloat64
@@ -590,9 +683,12 @@ func (r *CarPoolRideRepository) GetUserCompletedRides(ctx context.Context, userI
 			&homeLng,
 		)
 		if err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan completed ride\",\"error\":%v}", err)
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to scan completed ride\",\"user_id\":\"%s\",\"row_number\":%d,\"error\":%v}", userID, rowCount, err)
 			return nil, fmt.Errorf("failed to scan completed ride: %v", err)
 		}
+
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully scanned ride\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"carpool_id\":\"%s\",\"start_time\":\"%v\",\"status\":%d}",
+			userID, ride.ID, ride.CarpoolID, ride.StartTime, ride.Status)
 
 		// Convert NULL values to zero values
 		if locationLat.Valid {
@@ -619,14 +715,44 @@ func (r *CarPoolRideRepository) GetUserCompletedRides(ctx context.Context, userI
 				ride.ID, homeLat.Valid, homeLng.Valid, locationLat.Valid, locationLng.Valid)
 		}
 
+		// Calculate miles_saved if not present or zero
+		if (ride.MilesSaved == nil || *ride.MilesSaved == 0) && homeLat.Valid && homeLng.Valid && locationLat.Valid && locationLng.Valid {
+			distance := utils.CalculateDistance(homeLat.Float64, homeLng.Float64, locationLat.Float64, locationLng.Float64)
+			participantsCount := len(ride.Participants)
+			milesSaved := distance * float64(max(0, participantsCount-1))
+			// Round to 2 decimal places
+			milesSaved = math.Round(milesSaved*100) / 100
+			if milesSaved < 0 {
+				milesSaved = 0
+			}
+			ride.MilesSaved = &milesSaved
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"Calculated miles_saved\",\"ride_id\":\"%s\",\"distance\":%.2f,\"participants\":%d,\"miles_saved\":%.2f}", ride.ID, distance, participantsCount, milesSaved)
+		}
+
 		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to unmarshal participants for completed ride\",\"error\":%v}", err)
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to unmarshal participants for completed ride\",\"ride_id\":\"%s\",\"error\":%v}", ride.ID, err)
 			return nil, fmt.Errorf("failed to unmarshal participants: %v", err)
 		}
+
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Successfully processed ride\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"participants_count\":%d}", userID, ride.ID, len(ride.Participants))
 
 		rides = append(rides, ride)
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Found completed rides\",\"user_id\":\"%s\",\"count\":%d}", userID, len(rides))
+	// Check for any errors during iteration
+	if err = rows.Err(); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Error during row iteration\",\"user_id\":\"%s\",\"error\":%v}", userID, err)
+		return nil, fmt.Errorf("error during row iteration: %v", err)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Found completed rides\",\"user_id\":\"%s\",\"count\":%d,\"rows_scanned\":%d}", userID, len(rides), rowCount)
 	return rides, nil
+}
+
+// Helper function for max
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
