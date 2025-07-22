@@ -756,3 +756,80 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+// GetAllRidesForCarpool returns all rides for a specific carpool, ordered by start_time ascending
+func (r *CarPoolRideRepository) GetAllRidesForCarpool(ctx context.Context, carpoolID uuid.UUID) ([]models.CarpoolRide, error) {
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Fetching all rides for carpool\",\"carpool_id\":\"%s\"}", carpoolID)
+
+	query := `
+        SELECT id, carpool_id, driver_id, start_time, status, 
+               location_lat, location_lng, miles_saved, participants,
+               created_at, updated_at
+        FROM carpool_rides
+        WHERE carpool_id = $1
+        ORDER BY start_time ASC
+    `
+
+	rows, err := r.db.QueryContext(ctx, query, carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Query failed\",\"error\":\"%v\"}", err)
+		return nil, fmt.Errorf("failed to query carpool rides: %w", err)
+	}
+	defer rows.Close()
+
+	var rides []models.CarpoolRide
+	for rows.Next() {
+		var ride models.CarpoolRide
+		var participantsJSON []byte
+		var locationLat, locationLng, milesSaved sql.NullFloat64
+		var driverID sql.NullString
+
+		err := rows.Scan(
+			&ride.ID,
+			&ride.CarpoolID,
+			&driverID,
+			&ride.StartTime,
+			&ride.Status,
+			&locationLat,
+			&locationLng,
+			&milesSaved,
+			&participantsJSON,
+			&ride.CreatedAt,
+			&ride.UpdatedAt,
+		)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Scan failed\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to scan ride: %w", err)
+		}
+
+		// Convert NULL values to zero values
+		if locationLat.Valid {
+			ride.LocationLat = &locationLat.Float64
+		}
+		if locationLng.Valid {
+			ride.LocationLng = &locationLng.Float64
+		}
+		if milesSaved.Valid {
+			ride.MilesSaved = &milesSaved.Float64
+		}
+		if driverID.Valid {
+			parsedDriverID, _ := uuid.Parse(driverID.String)
+			ride.DriverID = &parsedDriverID
+		}
+
+		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"JSON unmarshal failed\",\"error\":\"%v\"}", err)
+			return nil, fmt.Errorf("failed to unmarshal participants: %w", err)
+		}
+
+		rides = append(rides, ride)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Found rides\",\"count\":%d}", len(rides))
+
+	if rides == nil {
+		rides = []models.CarpoolRide{}
+	}
+
+	return rides, nil
+}

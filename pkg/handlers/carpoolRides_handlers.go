@@ -842,3 +842,34 @@ func (h *CarPoolRideHandler) GetUserCompletedRides(w http.ResponseWriter, r *htt
 	log.Printf("🎉 [REQ-COMPLETED] {\"severity\":\"INFO\",\"message\":\"GetUserCompletedRides completed\",\"duration_ms\":%d,\"user_id\":\"%s\",\"count\":%d}",
 		duration.Milliseconds(), userID.String(), len(rides))
 }
+
+// GetAllRidesForCarpool returns all rides for a specific carpool
+func (h *CarPoolRideHandler) GetAllRidesForCarpool(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetAllRidesForCarpool called\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\",\"user_agent\":\"%s\"}",
+		r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())
+
+	vars := mux.Vars(r)
+	carpoolIDStr := vars["id"]
+	carpoolID, err := uuid.Parse(carpoolIDStr)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid carpool ID\",\"carpool_id_str\":\"%s\",\"error\":\"%v\"}", carpoolIDStr, err)
+		http.Error(w, "Invalid carpool ID", http.StatusBadRequest)
+		return
+	}
+
+	rides, err := h.carpoolRideRepo.GetAllRidesForCarpool(r.Context(), carpoolID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get all rides for carpool\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", carpoolID, err)
+		http.Error(w, "Failed to get rides", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(rides); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to encode response\",\"carpool_id\":\"%s\",\"error\":\"%v\"}", carpoolID, err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetAllRidesForCarpool completed successfully\",\"carpool_id\":\"%s\",\"ride_count\":%d}", carpoolID, len(rides))
+}
