@@ -249,9 +249,14 @@ func (r *CarPoolRideRepository) RemoveParticipant(ctx context.Context, rideID uu
 		return fmt.Errorf("ride not found")
 	}
 
+	log.Printf("[DRIVER_DEBUG] Before removal: ride_id=%s, driver_id=%v, participants=%v", rideID, ride.DriverID, ride.Participants)
+
 	isDriver := false
 	if ride.DriverID != nil && *ride.DriverID == userID {
 		isDriver = true
+		log.Printf("[DRIVER_DEBUG] User %s is the current driver for ride %s", userID, rideID)
+	} else {
+		log.Printf("[DRIVER_DEBUG] User %s is NOT the driver for ride %s", userID, rideID)
 	}
 
 	// Remove participant from participants array
@@ -273,7 +278,7 @@ func (r *CarPoolRideRepository) RemoveParticipant(ctx context.Context, rideID uu
 
 	_, err = r.db.ExecContext(ctx, query, rideID, userID)
 	if err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove participant\",\"error\":\"%v\"}", err)
+		log.Printf("[DRIVER_DEBUG] Failed to remove participant: %v", err)
 		return fmt.Errorf("failed to remove participant: %v", err)
 	}
 
@@ -282,13 +287,21 @@ func (r *CarPoolRideRepository) RemoveParticipant(ctx context.Context, rideID uu
 		driverQuery := `UPDATE carpool_rides SET driver_id = NULL, updated_at = NOW() WHERE id = $1`
 		_, err = r.db.ExecContext(ctx, driverQuery, rideID)
 		if err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to clear driver_id after driver left\",\"error\":\"%v\"}", err)
+			log.Printf("[DRIVER_DEBUG] Failed to clear driver_id after driver left: %v", err)
 			return fmt.Errorf("failed to clear driver_id: %v", err)
 		}
+		log.Printf("[DRIVER_DEBUG] Cleared driver_id for ride %s after removing driver %s", rideID, userID)
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Participant removed from ride\",\"ride_id\":\"%s\",\"user_id\":\"%s\",\"driver_cleared\":%v}",
-		rideID, userID, isDriver)
+	// Fetch the updated ride for after-state logging
+	updatedRide, err := r.GetCarpoolRide(ctx, rideID)
+	if err == nil && updatedRide != nil {
+		log.Printf("[DRIVER_DEBUG] After removal: ride_id=%s, driver_id=%v, participants=%v", rideID, updatedRide.DriverID, updatedRide.Participants)
+	} else {
+		log.Printf("[DRIVER_DEBUG] Could not fetch updated ride after removal for ride_id=%s", rideID)
+	}
+
+	log.Printf("[DRIVER_DEBUG] Participant removed from ride: ride_id=%s, user_id=%s, driver_cleared=%v", rideID, userID, isDriver)
 	return nil
 }
 
