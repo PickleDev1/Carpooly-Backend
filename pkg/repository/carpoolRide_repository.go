@@ -240,6 +240,21 @@ func (r *CarPoolRideRepository) GetUserActiveRides(ctx context.Context, userID s
 }
 
 func (r *CarPoolRideRepository) RemoveParticipant(ctx context.Context, rideID uuid.UUID, userID uuid.UUID) error {
+	// Fetch the current ride to check driver
+	ride, err := r.GetCarpoolRide(ctx, rideID)
+	if err != nil {
+		return err
+	}
+	if ride == nil {
+		return fmt.Errorf("ride not found")
+	}
+
+	isDriver := false
+	if ride.DriverID != nil && *ride.DriverID == userID {
+		isDriver = true
+	}
+
+	// Remove participant from participants array
 	query := `
         UPDATE carpool_rides
         SET 
@@ -252,26 +267,28 @@ func (r *CarPoolRideRepository) RemoveParticipant(ctx context.Context, rideID uu
                 FROM jsonb_array_elements(participants) participant
             ),
             updated_at = NOW()
+            -- driver_id will be set below if needed
         WHERE id = $1
     `
 
-	result, err := r.db.ExecContext(ctx, query, rideID, userID)
+	_, err = r.db.ExecContext(ctx, query, rideID, userID)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to remove participant\",\"error\":\"%v\"}", err)
 		return fmt.Errorf("failed to remove participant: %v", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("error getting rows affected: %v", err)
+	if isDriver {
+		// Set driver_id to NULL if the removed user was the driver
+		driverQuery := `UPDATE carpool_rides SET driver_id = NULL, updated_at = NOW() WHERE id = $1`
+		_, err = r.db.ExecContext(ctx, driverQuery, rideID)
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to clear driver_id after driver left\",\"error\":\"%v\"}", err)
+			return fmt.Errorf("failed to clear driver_id: %v", err)
+		}
 	}
 
-	if rowsAffected == 0 {
-		return fmt.Errorf("ride not found")
-	}
-
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Participant removed from ride\",\"ride_id\":\"%s\",\"user_id\":\"%s\"}",
-		rideID, userID)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"Participant removed from ride\",\"ride_id\":\"%s\",\"user_id\":\"%s\",\"driver_cleared\":%v}",
+		rideID, userID, isDriver)
 	return nil
 }
 
