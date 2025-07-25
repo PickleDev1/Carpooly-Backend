@@ -273,6 +273,8 @@ func main() {
 	corsMiddleware := cors.New(cors.Options{
 		AllowedOrigins: []string{
 			"https://carpooly-web.vercel.app",
+			"https://www.carpooly.app",
+			"https://carpooly.app",
 			"http://localhost:3000",
 			"http://localhost:3001",
 			"http://localhost:8080",
