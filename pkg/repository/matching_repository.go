@@ -176,19 +176,20 @@ func (r *MatchingRepository) GetUserMatchingPreferences(ctx context.Context, use
 func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, prefs *models.UserMatchingPreferences, companyID *uuid.UUID) error {
 	// PostgreSQL doesn't allow COALESCE expressions in ON CONFLICT, so we use a workaround:
 	// Check if record exists first, then UPDATE or INSERT accordingly
-	// For now, only handle personal preferences (company_id IS NULL)
+	// On dev branch: user_id is the PRIMARY KEY (no id column, no company_id column)
 
 	var err error
 
-	// Check if record exists (personal preferences only - company_id IS NULL)
-	var existingID uuid.UUID
-	checkQuery := `
-		SELECT id FROM user_matching_preferences 
-		WHERE user_id = $1 AND company_id IS NULL
-	`
-	err = r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&existingID)
+	// Check if record exists (using user_id as primary key)
+	var exists bool
+	checkQuery := `SELECT EXISTS(SELECT 1 FROM user_matching_preferences WHERE user_id = $1)`
+	err = r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&exists)
 
-	if err == nil {
+	if err != nil {
+		return fmt.Errorf("error checking if preferences exist: %w", err)
+	}
+
+	if exists {
 		// Record exists, update it
 		updateQuery := `
 			UPDATE user_matching_preferences SET
@@ -207,26 +208,26 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 				commute_days = $14,
 				is_active = $15,
 				updated_at = CURRENT_TIMESTAMP
-			WHERE id = $1
+			WHERE user_id = $1
 		`
 		_, err = r.db.ExecContext(ctx, updateQuery,
-			existingID,
+			prefs.UserID,
 			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
 			prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
 			prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
 			prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
 			prefs.IsActive,
 		)
-	} else if err == sql.ErrNoRows {
+	} else {
 		// Record doesn't exist, insert it
 		insertQuery := `
 			INSERT INTO user_matching_preferences (
-				user_id, company_id, site_id, max_detour_minutes, preferred_group_size, 
+				user_id, max_detour_minutes, preferred_group_size, 
 				driver_preference, schedule_flexibility_minutes, max_pickup_distance_miles, 
 				min_compatibility_score, notification_preferences, user_demographics, 
 				demographic_preferences, destination_latitude, destination_longitude, 
 				arrival_time, commute_days, is_active, created_at, updated_at
-			) VALUES ($1, NULL, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		`
 		_, err = r.db.ExecContext(ctx, insertQuery,
 			prefs.UserID,
@@ -237,7 +238,6 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 			prefs.IsActive,
 		)
 	}
-	// If there was an error checking (other than NoRows), it will be returned below
 
 	if err != nil {
 		return fmt.Errorf("error upserting user matching preferences: %w", err)
