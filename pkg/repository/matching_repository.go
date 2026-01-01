@@ -174,70 +174,43 @@ func (r *MatchingRepository) GetUserMatchingPreferences(ctx context.Context, use
 }
 
 func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, prefs *models.UserMatchingPreferences, companyID *uuid.UUID) error {
-	// PostgreSQL doesn't allow COALESCE expressions in ON CONFLICT, so we use a workaround:
-	// Check if record exists first, then UPDATE or INSERT accordingly
-	// On dev branch: user_id is the PRIMARY KEY (no id column, no company_id column)
+	// Original implementation: user_id is PRIMARY KEY, use ON CONFLICT (user_id)
+	// This works on dev branch where user_id is still the primary key
+	
+	query := `
+		INSERT INTO user_matching_preferences (
+			user_id, max_detour_minutes, preferred_group_size, 
+			driver_preference, schedule_flexibility_minutes, max_pickup_distance_miles, 
+			min_compatibility_score, notification_preferences, user_demographics, 
+			demographic_preferences, destination_latitude, destination_longitude, 
+			arrival_time, commute_days, is_active, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT (user_id) DO UPDATE SET
+			max_detour_minutes = EXCLUDED.max_detour_minutes,
+			preferred_group_size = EXCLUDED.preferred_group_size,
+			driver_preference = EXCLUDED.driver_preference,
+			schedule_flexibility_minutes = EXCLUDED.schedule_flexibility_minutes,
+			max_pickup_distance_miles = EXCLUDED.max_pickup_distance_miles,
+			min_compatibility_score = EXCLUDED.min_compatibility_score,
+			notification_preferences = EXCLUDED.notification_preferences,
+			user_demographics = EXCLUDED.user_demographics,
+			demographic_preferences = EXCLUDED.demographic_preferences,
+			destination_latitude = EXCLUDED.destination_latitude,
+			destination_longitude = EXCLUDED.destination_longitude,
+			arrival_time = EXCLUDED.arrival_time,
+			commute_days = EXCLUDED.commute_days,
+			is_active = EXCLUDED.is_active,
+			updated_at = CURRENT_TIMESTAMP
+	`
 
-	var err error
-
-	// Check if record exists (using user_id as primary key)
-	var exists bool
-	checkQuery := `SELECT EXISTS(SELECT 1 FROM user_matching_preferences WHERE user_id = $1)`
-	err = r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&exists)
-
-	if err != nil {
-		return fmt.Errorf("error checking if preferences exist: %w", err)
-	}
-
-	if exists {
-		// Record exists, update it
-		updateQuery := `
-			UPDATE user_matching_preferences SET
-				max_detour_minutes = $2,
-				preferred_group_size = $3,
-				driver_preference = $4,
-				schedule_flexibility_minutes = $5,
-				max_pickup_distance_miles = $6,
-				min_compatibility_score = $7,
-				notification_preferences = $8,
-				user_demographics = $9,
-				demographic_preferences = $10,
-				destination_latitude = $11,
-				destination_longitude = $12,
-				arrival_time = $13,
-				commute_days = $14,
-				is_active = $15,
-				updated_at = CURRENT_TIMESTAMP
-			WHERE user_id = $1
-		`
-		_, err = r.db.ExecContext(ctx, updateQuery,
-			prefs.UserID,
-			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
-			prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
-			prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
-			prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
-			prefs.IsActive,
-		)
-	} else {
-		// Record doesn't exist, insert it
-		insertQuery := `
-			INSERT INTO user_matching_preferences (
-				user_id, max_detour_minutes, preferred_group_size, 
-				driver_preference, schedule_flexibility_minutes, max_pickup_distance_miles, 
-				min_compatibility_score, notification_preferences, user_demographics, 
-				demographic_preferences, destination_latitude, destination_longitude, 
-				arrival_time, commute_days, is_active, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		`
-		_, err = r.db.ExecContext(ctx, insertQuery,
-			prefs.UserID,
-			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
-			prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
-			prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
-			prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
-			prefs.IsActive,
-		)
-	}
+	_, err := r.db.ExecContext(ctx, query,
+		prefs.UserID,
+		prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
+		prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
+		prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
+		prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
+		prefs.IsActive,
+	)
 
 	if err != nil {
 		return fmt.Errorf("error upserting user matching preferences: %w", err)
