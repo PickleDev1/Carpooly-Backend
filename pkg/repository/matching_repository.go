@@ -174,101 +174,79 @@ func (r *MatchingRepository) GetUserMatchingPreferences(ctx context.Context, use
 }
 
 func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, prefs *models.UserMatchingPreferences, companyID *uuid.UUID) error {
-	// Handle both schemas:
-	// 1. Original: user_id is PRIMARY KEY → ON CONFLICT (user_id) works
-	// 2. After migration 026: id is PRIMARY KEY, user_id is not unique → use SELECT-then-UPDATE/INSERT
+	// Migration 026 was run - id is PRIMARY KEY, user_id is not unique
+	// Use SELECT-then-UPDATE/INSERT approach (works for both schemas)
 	
-	// Try ON CONFLICT (user_id) first - if it fails, fall back to SELECT-then-UPDATE/INSERT
-	// This handles both the original schema and the migrated schema
-	
-	// First, try the simple approach with ON CONFLICT
-	query := `
-		INSERT INTO user_matching_preferences (
-			user_id, max_detour_minutes, preferred_group_size, 
-			driver_preference, schedule_flexibility_minutes, max_pickup_distance_miles, 
-			min_compatibility_score, notification_preferences, user_demographics, 
-			demographic_preferences, destination_latitude, destination_longitude, 
-			arrival_time, commute_days, is_active, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		ON CONFLICT (user_id) DO UPDATE SET
-			max_detour_minutes = EXCLUDED.max_detour_minutes,
-			preferred_group_size = EXCLUDED.preferred_group_size,
-			driver_preference = EXCLUDED.driver_preference,
-			schedule_flexibility_minutes = EXCLUDED.schedule_flexibility_minutes,
-			max_pickup_distance_miles = EXCLUDED.max_pickup_distance_miles,
-			min_compatibility_score = EXCLUDED.min_compatibility_score,
-			notification_preferences = EXCLUDED.notification_preferences,
-			user_demographics = EXCLUDED.user_demographics,
-			demographic_preferences = EXCLUDED.demographic_preferences,
-			destination_latitude = EXCLUDED.destination_latitude,
-			destination_longitude = EXCLUDED.destination_longitude,
-			arrival_time = EXCLUDED.arrival_time,
-			commute_days = EXCLUDED.commute_days,
-			is_active = EXCLUDED.is_active,
-			updated_at = CURRENT_TIMESTAMP
+	// Check if record exists (for personal preferences: company_id IS NULL)
+	var existingID uuid.UUID
+	checkQuery := `
+		SELECT id FROM user_matching_preferences 
+		WHERE user_id = $1 AND company_id IS NULL
 	`
+	err := r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&existingID)
 
-	_, err := r.db.ExecContext(ctx, query,
-		prefs.UserID,
-		prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
-		prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
-		prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
-		prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
-		prefs.IsActive,
-	)
-
-	// If ON CONFLICT fails (migration 026 was run), use SELECT-then-UPDATE/INSERT
-	if err != nil && strings.Contains(err.Error(), "no unique or exclusion constraint") {
-		// Migration 026 was run - use SELECT-then-UPDATE/INSERT approach
-		// Check if record exists (for personal preferences: company_id IS NULL)
-		var existingID uuid.UUID
-		checkQuery := `
-			SELECT id FROM user_matching_preferences 
-			WHERE user_id = $1 AND company_id IS NULL
+	if err == nil {
+		// Record exists, update it
+		updateQuery := `
+			UPDATE user_matching_preferences SET
+				max_detour_minutes = $2,
+				preferred_group_size = $3,
+				driver_preference = $4,
+				schedule_flexibility_minutes = $5,
+				max_pickup_distance_miles = $6,
+				min_compatibility_score = $7,
+				notification_preferences = $8,
+				user_demographics = $9,
+				demographic_preferences = $10,
+				destination_latitude = $11,
+				destination_longitude = $12,
+				arrival_time = $13,
+				commute_days = $14,
+				is_active = $15,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE id = $1
 		`
-		err = r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&existingID)
-
-		if err == nil {
-			// Record exists, update it
-			updateQuery := `
-				UPDATE user_matching_preferences SET
-					max_detour_minutes = $2,
-					preferred_group_size = $3,
-					driver_preference = $4,
-					schedule_flexibility_minutes = $5,
-					max_pickup_distance_miles = $6,
-					min_compatibility_score = $7,
-					notification_preferences = $8,
-					user_demographics = $9,
-					demographic_preferences = $10,
-					destination_latitude = $11,
-					destination_longitude = $12,
-					arrival_time = $13,
-					commute_days = $14,
-					is_active = $15,
-					updated_at = CURRENT_TIMESTAMP
-				WHERE id = $1
-			`
-			_, err = r.db.ExecContext(ctx, updateQuery,
-				existingID,
-				prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
-				prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
-				prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
-				prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
-				prefs.IsActive,
-			)
-		} else if err == sql.ErrNoRows {
-			// Record doesn't exist, insert it (with company_id IS NULL for personal)
-			insertQuery := `
+		_, err = r.db.ExecContext(ctx, updateQuery,
+			existingID,
+			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
+			prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
+			prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
+			prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
+			prefs.IsActive,
+		)
+	} else if err == sql.ErrNoRows {
+		// Record doesn't exist, insert it (with company_id IS NULL for personal)
+		// Try with company_id column first (migration 026 run), fall back if column doesn't exist
+		insertQuery := `
+			INSERT INTO user_matching_preferences (
+				user_id, company_id, site_id, max_detour_minutes, preferred_group_size, 
+				driver_preference, schedule_flexibility_minutes, max_pickup_distance_miles, 
+				min_compatibility_score, notification_preferences, user_demographics, 
+				demographic_preferences, destination_latitude, destination_longitude, 
+				arrival_time, commute_days, is_active, created_at, updated_at
+			) VALUES ($1, NULL, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		`
+		_, err = r.db.ExecContext(ctx, insertQuery,
+			prefs.UserID,
+			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
+			prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
+			prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
+			prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
+			prefs.IsActive,
+		)
+		
+		// If company_id column doesn't exist (migration 026 not run), try without it
+		if err != nil && strings.Contains(err.Error(), "column") && strings.Contains(err.Error(), "does not exist") {
+			insertQueryNoCompany := `
 				INSERT INTO user_matching_preferences (
-					user_id, company_id, site_id, max_detour_minutes, preferred_group_size, 
+					user_id, max_detour_minutes, preferred_group_size, 
 					driver_preference, schedule_flexibility_minutes, max_pickup_distance_miles, 
 					min_compatibility_score, notification_preferences, user_demographics, 
 					demographic_preferences, destination_latitude, destination_longitude, 
 					arrival_time, commute_days, is_active, created_at, updated_at
-				) VALUES ($1, NULL, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 			`
-			_, err = r.db.ExecContext(ctx, insertQuery,
+			_, err = r.db.ExecContext(ctx, insertQueryNoCompany,
 				prefs.UserID,
 				prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
 				prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
