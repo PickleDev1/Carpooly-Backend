@@ -276,6 +276,9 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"UpdateUserMatchingPreferences: Updating preferences\",\"user_uuid\":\"%s\",\"max_detour\":%d,\"group_size\":%d,\"compatibility\":%.2f}",
 		userUUID.String(), prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.MinCompatibilityScore)
 
+	// 🚨 DEPLOYMENT CHECK: This log confirms the handler is calling the repository
+	log.Printf("🚀🚀🚀 HANDLER: About to call UpsertUserMatchingPreferences - NEW CODE VERSION 🚀🚀🚀")
+
 	// Phase 3: Default to personal scope (companyID = nil)
 	// In Phase 4, we'll add scope resolution from request body/query params
 	var companyID *uuid.UUID = nil
