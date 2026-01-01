@@ -174,9 +174,13 @@ func (r *MatchingRepository) GetUserMatchingPreferences(ctx context.Context, use
 }
 
 func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, prefs *models.UserMatchingPreferences, companyID *uuid.UUID) error {
+	// 🚨 DEPLOYMENT CHECK: This log confirms the latest code is deployed
+	log.Printf("🚀🚀🚀 UpsertUserMatchingPreferences: NEW CODE VERSION - Using SELECT-then-UPDATE/INSERT approach 🚀🚀🚀")
+	
 	// Migration 026 was run - id is PRIMARY KEY, user_id is not unique
 	// The unique constraint is idx_preferences_user_company on (user_id, COALESCE(company_id, ...))
 	// Use SELECT-then-UPDATE/INSERT approach to handle the unique index
+	// NO ON CONFLICT CLAUSES - This function does NOT use ON CONFLICT
 
 	// Check if record exists (for personal preferences: company_id IS NULL)
 	// Handle case where id or company_id columns might not exist yet
@@ -188,8 +192,9 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 		SELECT id FROM user_matching_preferences 
 		WHERE user_id = $1 AND company_id IS NULL
 	`
+	log.Printf("🔍 Checking if preferences exist for user_id: %s", prefs.UserID)
 	checkErr = r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&existingID)
-	
+
 	// If that fails because company_id doesn't exist, try without it
 	if checkErr != nil && (strings.Contains(checkErr.Error(), "column") && strings.Contains(checkErr.Error(), "does not exist")) {
 		checkQueryNoCompany := `
@@ -269,6 +274,7 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 		return nil
 	} else if checkErr == sql.ErrNoRows {
 		// Record doesn't exist, insert it
+		log.Printf("➕ Record doesn't exist, inserting new preferences")
 		// Try with company_id column first (migration 026 run)
 		insertQuery := `
 			INSERT INTO user_matching_preferences (
@@ -279,6 +285,7 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 				arrival_time, commute_days, is_active, created_at, updated_at
 			) VALUES ($1, NULL, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		`
+		log.Printf("🔧 Executing INSERT query (NO ON CONFLICT - this is a plain INSERT)")
 		_, err := r.db.ExecContext(ctx, insertQuery,
 			prefs.UserID,
 			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
@@ -308,56 +315,69 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 				prefs.IsActive,
 			)
 		}
-		
+
 		// If INSERT fails due to unique constraint violation, record was created between SELECT and INSERT
 		// Try to update it instead
-		if err != nil && (strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate")) {
-			// Race condition - record was inserted between our SELECT and INSERT
-			// Try to get the id and update
-			var raceID uuid.UUID
-			raceCheckQuery := `
-				SELECT id FROM user_matching_preferences 
-				WHERE user_id = $1 AND company_id IS NULL
-			`
-			if raceErr := r.db.QueryRowContext(ctx, raceCheckQuery, prefs.UserID).Scan(&raceID); raceErr == nil {
-				// Now update it
-				updateQuery := `
-					UPDATE user_matching_preferences SET
-						max_detour_minutes = $2,
-						preferred_group_size = $3,
-						driver_preference = $4,
-						schedule_flexibility_minutes = $5,
-						max_pickup_distance_miles = $6,
-						min_compatibility_score = $7,
-						notification_preferences = $8,
-						user_demographics = $9,
-						demographic_preferences = $10,
-						destination_latitude = $11,
-						destination_longitude = $12,
-						arrival_time = $13,
-						commute_days = $14,
-						is_active = $15,
-						updated_at = CURRENT_TIMESTAMP
-					WHERE id = $1
-				`
-				_, err = r.db.ExecContext(ctx, updateQuery,
-					raceID,
-					prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
-					prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
-					prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
-					prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
-					prefs.IsActive,
-				)
-			}
-		}
-		
 		if err != nil {
+			log.Printf("⚠️ INSERT failed with error: %v", err)
+			if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
+				log.Printf("🔄 Unique constraint violation detected - record was created between SELECT and INSERT, trying UPDATE instead")
+				// Race condition - record was inserted between our SELECT and INSERT
+				// Try to get the id and update
+				var raceID uuid.UUID
+				raceCheckQuery := `
+					SELECT id FROM user_matching_preferences 
+					WHERE user_id = $1 AND company_id IS NULL
+				`
+				if raceErr := r.db.QueryRowContext(ctx, raceCheckQuery, prefs.UserID).Scan(&raceID); raceErr == nil {
+					log.Printf("🔄 Found record with id: %s, updating instead", raceID.String())
+					// Now update it
+					updateQuery := `
+						UPDATE user_matching_preferences SET
+							max_detour_minutes = $2,
+							preferred_group_size = $3,
+							driver_preference = $4,
+							schedule_flexibility_minutes = $5,
+							max_pickup_distance_miles = $6,
+							min_compatibility_score = $7,
+							notification_preferences = $8,
+							user_demographics = $9,
+							demographic_preferences = $10,
+							destination_latitude = $11,
+							destination_longitude = $12,
+							arrival_time = $13,
+							commute_days = $14,
+							is_active = $15,
+							updated_at = CURRENT_TIMESTAMP
+						WHERE id = $1
+					`
+					_, err = r.db.ExecContext(ctx, updateQuery,
+						raceID,
+						prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
+						prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
+						prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
+						prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
+						prefs.IsActive,
+					)
+					if err == nil {
+						log.Printf("✅✅✅ Successfully updated preferences after race condition ✅✅✅")
+						return nil
+					}
+				}
+			}
+			// Check if error mentions ON CONFLICT - this should NEVER happen with our code
+			if strings.Contains(err.Error(), "ON CONFLICT") || strings.Contains(err.Error(), "conflict") {
+				log.Printf("🚨🚨🚨 CRITICAL: Error mentions ON CONFLICT but our code doesn't use it! Error: %v 🚨🚨🚨", err)
+			}
+			log.Printf("❌❌❌ FINAL ERROR in INSERT/UPDATE: %v ❌❌❌", err)
 			return fmt.Errorf("error inserting user matching preferences: %w", err)
 		}
+		log.Printf("✅✅✅ Successfully inserted new preferences ✅✅✅")
 		return nil
 	}
 
 	// If we get here, there was an error checking
+	log.Printf("❌❌❌ ERROR checking if preferences exist: %v ❌❌❌", checkErr)
 	return fmt.Errorf("error checking if preferences exist: %w", checkErr)
 }
 
