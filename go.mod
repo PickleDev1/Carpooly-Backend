@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/cors v1.11.1
+	googlemaps.github.io/maps v1.7.0
 )
 
 require (
