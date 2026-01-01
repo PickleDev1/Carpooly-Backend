@@ -175,18 +175,67 @@ func (r *MatchingRepository) GetUserMatchingPreferences(ctx context.Context, use
 
 func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, prefs *models.UserMatchingPreferences, companyID *uuid.UUID) error {
 	// Migration 026 was run - id is PRIMARY KEY, user_id is not unique
-	// Use SELECT-then-UPDATE/INSERT approach (works for both schemas)
-	
+	// The unique constraint is idx_preferences_user_company on (user_id, COALESCE(company_id, ...))
+	// Use SELECT-then-UPDATE/INSERT approach to handle the unique index
+
 	// Check if record exists (for personal preferences: company_id IS NULL)
+	// Handle case where id or company_id columns might not exist yet
 	var existingID uuid.UUID
+	var checkErr error
+	
+	// First try with company_id (migration 026 run)
 	checkQuery := `
 		SELECT id FROM user_matching_preferences 
 		WHERE user_id = $1 AND company_id IS NULL
 	`
-	err := r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&existingID)
+	checkErr = r.db.QueryRowContext(ctx, checkQuery, prefs.UserID).Scan(&existingID)
+	
+	// If that fails because company_id doesn't exist, try without it
+	if checkErr != nil && (strings.Contains(checkErr.Error(), "column") && strings.Contains(checkErr.Error(), "does not exist")) {
+		checkQueryNoCompany := `
+			SELECT user_id FROM user_matching_preferences 
+			WHERE user_id = $1
+		`
+		var dummyUUID uuid.UUID
+		checkErr = r.db.QueryRowContext(ctx, checkQueryNoCompany, prefs.UserID).Scan(&dummyUUID)
+		if checkErr == nil {
+			// Record exists but we don't have id column - use user_id for update
+			updateQueryNoID := `
+				UPDATE user_matching_preferences SET
+					max_detour_minutes = $2,
+					preferred_group_size = $3,
+					driver_preference = $4,
+					schedule_flexibility_minutes = $5,
+					max_pickup_distance_miles = $6,
+					min_compatibility_score = $7,
+					notification_preferences = $8,
+					user_demographics = $9,
+					demographic_preferences = $10,
+					destination_latitude = $11,
+					destination_longitude = $12,
+					arrival_time = $13,
+					commute_days = $14,
+					is_active = $15,
+					updated_at = CURRENT_TIMESTAMP
+				WHERE user_id = $1
+			`
+			_, err := r.db.ExecContext(ctx, updateQueryNoID,
+				prefs.UserID,
+				prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
+				prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
+				prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
+				prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
+				prefs.IsActive,
+			)
+			if err != nil {
+				return fmt.Errorf("error updating user matching preferences: %w", err)
+			}
+			return nil
+		}
+	}
 
-	if err == nil {
-		// Record exists, update it
+	if checkErr == nil {
+		// Record exists, update it using id
 		updateQuery := `
 			UPDATE user_matching_preferences SET
 				max_detour_minutes = $2,
@@ -206,7 +255,7 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 				updated_at = CURRENT_TIMESTAMP
 			WHERE id = $1
 		`
-		_, err = r.db.ExecContext(ctx, updateQuery,
+		_, err := r.db.ExecContext(ctx, updateQuery,
 			existingID,
 			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
 			prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
@@ -214,9 +263,13 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 			prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
 			prefs.IsActive,
 		)
-	} else if err == sql.ErrNoRows {
-		// Record doesn't exist, insert it (with company_id IS NULL for personal)
-		// Try with company_id column first (migration 026 run), fall back if column doesn't exist
+		if err != nil {
+			return fmt.Errorf("error updating user matching preferences: %w", err)
+		}
+		return nil
+	} else if checkErr == sql.ErrNoRows {
+		// Record doesn't exist, insert it
+		// Try with company_id column first (migration 026 run)
 		insertQuery := `
 			INSERT INTO user_matching_preferences (
 				user_id, company_id, site_id, max_detour_minutes, preferred_group_size, 
@@ -226,7 +279,7 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 				arrival_time, commute_days, is_active, created_at, updated_at
 			) VALUES ($1, NULL, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		`
-		_, err = r.db.ExecContext(ctx, insertQuery,
+		_, err := r.db.ExecContext(ctx, insertQuery,
 			prefs.UserID,
 			prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
 			prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
@@ -234,7 +287,7 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 			prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
 			prefs.IsActive,
 		)
-		
+
 		// If company_id column doesn't exist (migration 026 not run), try without it
 		if err != nil && strings.Contains(err.Error(), "column") && strings.Contains(err.Error(), "does not exist") {
 			insertQueryNoCompany := `
@@ -255,13 +308,57 @@ func (r *MatchingRepository) UpsertUserMatchingPreferences(ctx context.Context, 
 				prefs.IsActive,
 			)
 		}
+		
+		// If INSERT fails due to unique constraint violation, record was created between SELECT and INSERT
+		// Try to update it instead
+		if err != nil && (strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate")) {
+			// Race condition - record was inserted between our SELECT and INSERT
+			// Try to get the id and update
+			var raceID uuid.UUID
+			raceCheckQuery := `
+				SELECT id FROM user_matching_preferences 
+				WHERE user_id = $1 AND company_id IS NULL
+			`
+			if raceErr := r.db.QueryRowContext(ctx, raceCheckQuery, prefs.UserID).Scan(&raceID); raceErr == nil {
+				// Now update it
+				updateQuery := `
+					UPDATE user_matching_preferences SET
+						max_detour_minutes = $2,
+						preferred_group_size = $3,
+						driver_preference = $4,
+						schedule_flexibility_minutes = $5,
+						max_pickup_distance_miles = $6,
+						min_compatibility_score = $7,
+						notification_preferences = $8,
+						user_demographics = $9,
+						demographic_preferences = $10,
+						destination_latitude = $11,
+						destination_longitude = $12,
+						arrival_time = $13,
+						commute_days = $14,
+						is_active = $15,
+						updated_at = CURRENT_TIMESTAMP
+					WHERE id = $1
+				`
+				_, err = r.db.ExecContext(ctx, updateQuery,
+					raceID,
+					prefs.MaxDetourMinutes, prefs.PreferredGroupSize, prefs.DriverPreference,
+					prefs.ScheduleFlexibilityMinutes, prefs.MaxPickupDistanceMiles, prefs.MinCompatibilityScore,
+					prefs.NotificationPreferences, prefs.UserDemographics, prefs.DemographicPreferences,
+					prefs.DestinationLatitude, prefs.DestinationLongitude, prefs.ArrivalTime, prefs.CommuteDays,
+					prefs.IsActive,
+				)
+			}
+		}
+		
+		if err != nil {
+			return fmt.Errorf("error inserting user matching preferences: %w", err)
+		}
+		return nil
 	}
 
-	if err != nil {
-		return fmt.Errorf("error upserting user matching preferences: %w", err)
-	}
-
-	return nil
+	// If we get here, there was an error checking
+	return fmt.Errorf("error checking if preferences exist: %w", checkErr)
 }
 
 // Potential Matches Methods
