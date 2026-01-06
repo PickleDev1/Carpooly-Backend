@@ -232,8 +232,10 @@ func (r *CarPoolRepository) GetUserCarpools(ctx context.Context, userID uuid.UUI
 	var carpools []models.Carpool
 
 	// Join carpools and carpool_members tables to get carpools where the user is a member
+	// Explicitly list columns to avoid issues with additional columns
 	query := `
-           SELECT DISTINCT c.* 
+           SELECT DISTINCT c.id, c.creator_id, c.carpool_name, c.status, c.recurring_option, 
+                  c.available_seats, c.destination_address, c.seats, c.created_at, c.updated_at
                 FROM carpools c
                 JOIN carpool_members cm ON c.id = cm.carpool_id
                 WHERE cm.user_id = $1

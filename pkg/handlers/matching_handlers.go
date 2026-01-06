@@ -46,6 +46,12 @@ func NewMatchingHandler(matchingRepo *repository.MatchingRepository, userRepo *r
 
 // 1. GET /api/matching/preferences - Fetch user preferences
 func (h *MatchingHandler) GetUserMatchingPreferences(w http.ResponseWriter, r *http.Request) {
+	// Handle OPTIONS preflight request
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Log the route being called
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"🚀 ROUTE CALLED: /api/matching/preferences\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\"}",
 		r.Method, r.URL.String(), r.RemoteAddr)
@@ -100,11 +106,7 @@ func (h *MatchingHandler) GetUserMatchingPreferences(w http.ResponseWriter, r *h
 	// CRITICAL SECURITY LOGGING: Track user ID being used for database query
 	log.Printf("{\"severity\":\"SECURITY\",\"message\":\"GetUserMatchingPreferences: About to query database with user_id\",\"user_uuid\":\"%s\",\"clerk_id\":\"%s\"}", userUUID.String(), userID)
 
-	// Phase 3: Default to personal scope (companyID = nil)
-	// In Phase 4, we'll add scope resolution from request parameters
-	var companyID *uuid.UUID = nil
-
-	prefs, err := h.matchingRepo.GetUserMatchingPreferences(r.Context(), userUUID.String(), companyID)
+	prefs, err := h.matchingRepo.GetUserMatchingPreferences(r.Context(), userUUID.String())
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetUserMatchingPreferences: Error getting user preferences\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -164,6 +166,11 @@ func (h *MatchingHandler) GetUserMatchingPreferences(w http.ResponseWriter, r *h
 
 // 2. PUT /api/matching/preferences - Update user preferences
 func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r *http.Request) {
+	// Handle OPTIONS preflight request
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	// Log the route being called
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"🚀 ROUTE CALLED: /api/matching/preferences (PUT)\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\"}",
 		r.Method, r.URL.String(), r.RemoteAddr)
@@ -279,12 +286,7 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 	// 🚨 DEPLOYMENT CHECK: This log confirms the handler is calling the repository
 	log.Printf("🚀🚀🚀 HANDLER: About to call UpsertUserMatchingPreferences - NEW CODE VERSION 🚀🚀🚀")
 
-	// Phase 3: Default to personal scope (companyID = nil)
-	// In Phase 4, we'll add scope resolution from request body/query params
-	var companyID *uuid.UUID = nil
-	// TODO: Phase 4 - Extract company_id from request body if provided
-
-	err = h.matchingRepo.UpsertUserMatchingPreferences(r.Context(), &prefs, companyID)
+	err = h.matchingRepo.UpsertUserMatchingPreferences(r.Context(), &prefs)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Error updating preferences\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -307,6 +309,12 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 
 // 3. GET /api/matching/potential-matches - Get potential matches
 func (h *MatchingHandler) GetPotentialMatches(w http.ResponseWriter, r *http.Request) {
+	// Handle OPTIONS preflight request
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Log the route being called
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"🚀 ROUTE CALLED: /api/matching/potential-matches\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\"}",
 		r.Method, r.URL.String(), r.RemoteAddr)
@@ -358,18 +366,16 @@ func (h *MatchingHandler) GetPotentialMatches(w http.ResponseWriter, r *http.Req
 
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetPotentialMatches: Clerk ID converted to UUID\",\"clerk_id\":\"%s\",\"user_uuid\":\"%s\"}", userID, userUUID.String())
 
-	// Use preference-driven filtering instead of broad user lists
-	candidates, err := h.matchingRepo.FindCandidatesByPreferences(r.Context(), userUUID.String())
+	// Get existing potential matches from database (created by FindMatches)
+	// This reads matches that were already calculated and saved
+	// Query without status filter to get ALL matches regardless of status
+	// We'll filter by status in the response formatting
+	// This ensures we don't miss any matches that might have different statuses
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Fetching ALL matches (no status filter)\",\"user_id\":\"%s\"}", userUUID.String())
+	dbMatches, err := h.matchingRepo.GetPotentialMatches(r.Context(), userUUID.String(), "")
 	if err != nil {
-		// Check if it's a destination not set error
-		if err.Error() == "destination not set in preferences - cannot find matches" {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetPotentialMatches: Destination not set\",\"user_id\":\"%s\"}", userUUID.String())
-			http.Error(w, "Destination required. Please set your destination in preferences.", http.StatusBadRequest)
-			return
-		}
-
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetPotentialMatches: Error finding candidates\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
-		// Return empty response instead of 500 error
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetPotentialMatches: Error getting matches from database\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+		// Fall back to empty response
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"pending_matches":  []interface{}{},
@@ -379,70 +385,308 @@ func (h *MatchingHandler) GetPotentialMatches(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Score each candidate and filter by fixed min_compatibility_score (simplified UI)
-	const minCompatibilityScore = 0.7 // Fixed value for simplified UI
-	var scoredMatches []map[string]interface{}
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetPotentialMatches: Found %d matches in database\",\"user_id\":\"%s\"}", len(dbMatches), userUUID.String())
 
-	for _, candidate := range candidates {
-		// Get full user data for scoring (repo expects uuid.UUID)
-		currentUser, err := h.userRepo.GetUserByID(userUUID)
-		if err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetPotentialMatches: Error getting current user\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
-			continue
-		}
-
-		// Calculate real compatibility using enhanced matching service
-		compatibility, err := h.enhancedMatchingService.CalculateRealCompatibility(currentUser, candidate)
-		if err != nil {
-			log.Printf("{\"severity\":\"WARN\",\"message\":\"GetPotentialMatches: Error calculating compatibility\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), candidate.ID, err)
-			continue
-		}
-
-		// Filter by fixed min_compatibility_score (simplified UI)
-		if compatibility.CompatibilityScore < minCompatibilityScore {
-			continue
-		}
-
-		// Debug: Log the Clerk ID being returned
-		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Returning candidate\",\"candidate_id\":\"%s\",\"clerk_id\":\"%s\",\"clerk_id_length\":%d}", candidate.ID.String(), candidate.ClerkID, len(candidate.ClerkID))
-
-		// Create match data in the format expected by frontend
-		matchData := map[string]interface{}{
-			"id":                          compatibility.ID,
-			"user2":                       candidate,
-			"user2_clerk_id":              candidate.ClerkID,
-			"compatibility_score":         compatibility.CompatibilityScore,
-			"route_overlap_percentage":    compatibility.RouteOverlapPercentage,
-			"total_distance_miles":        compatibility.TotalDistanceMiles,
-			"estimated_savings_per_month": compatibility.EstimatedSavingsPerMonth,
-			"match_reasons":               compatibility.MatchReasons,
-			"schedule": func() map[string]interface{} {
-				details := h.enhancedMatchingService.GetScheduleCompatibilityDetails(currentUser, candidate)
-				return map[string]interface{}{
-					"departure_time":      details.DepartureTime,
-					"frequency":           details.Frequency,
-					"flexibility_minutes": details.FlexibilityMinutes,
-					"compatibility_score": details.CompatibilityScore,
-				}
-			}(),
-			"status":     compatibility.Status,
-			"expires_at": compatibility.ExpiresAt,
-			"created_at": compatibility.CreatedAt,
-		}
-
-		scoredMatches = append(scoredMatches, matchData)
+	// Log all matches found with their status and scores for debugging
+	for i, match := range dbMatches {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Match %d from DB\",\"user_id\":\"%s\",\"match_index\":%d,\"match_id\":\"%s\",\"status\":\"%s\",\"compatibility_score\":%.3f,\"user1_id\":\"%s\",\"user2_id\":\"%s\"}",
+			i+1, userUUID.String(), i+1, match.ID, match.Status, match.CompatibilityScore, match.User1ID, match.User2ID)
 	}
 
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetPotentialMatches: Found preference-driven matches\",\"user_id\":\"%s\",\"candidates\":%d,\"matches\":%d}",
-		userUUID.String(), len(candidates), len(scoredMatches))
+	// Separate matches by status
+	var pendingMatches []*models.PotentialMatch
+	var acceptedMatches []*models.PotentialMatch
+	var expiredMatches []*models.PotentialMatch
 
-	// Return all matches as pending (since they're new potential matches)
+	for _, match := range dbMatches {
+		switch match.Status {
+		case "active":
+			// Active matches are the ones to show (these are pending user action)
+			pendingMatches = append(pendingMatches, match)
+		case "accepted":
+			acceptedMatches = append(acceptedMatches, match)
+		case "expired", "rejected":
+			expiredMatches = append(expiredMatches, match)
+		default:
+			// Default to active for unknown statuses (treat as pending user action)
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Match with unknown status treated as active\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"status\":\"%s\"}",
+				userUUID.String(), match.ID, match.Status)
+			pendingMatches = append(pendingMatches, match)
+		}
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetPotentialMatches: Categorized matches\",\"user_id\":\"%s\",\"pending\":%d,\"accepted\":%d,\"expired\":%d}",
+		userUUID.String(), len(pendingMatches), len(acceptedMatches), len(expiredMatches))
+
+	// Use pending matches for the main response (these are the ones to show)
+	dbMatches = pendingMatches
+
+	// Deduplicate matches: remove duplicates where the same user pair appears in different orders
+	// (e.g., user1_id=A, user2_id=B and user1_id=B, user2_id=A are the same match)
+	// When duplicates exist, keep the one with the highest compatibility score
+	// IMPORTANT: Use the "other user" ID (not the requesting user) to create the pair key
+	seenPairs := make(map[string]*models.PotentialMatch)
+	var deduplicatedMatches []*models.PotentialMatch
+	var duplicatesRemoved int
+	requestingUserID := userUUID.String()
+
+	for _, match := range dbMatches {
+		// Determine the "other user" ID (the one that's not the requesting user)
+		var otherUserID string
+		if match.User1ID == requestingUserID {
+			otherUserID = match.User2ID
+		} else {
+			otherUserID = match.User1ID
+		}
+
+		// Create a canonical key using the requesting user and other user (always use lexicographically smaller ID first)
+		// This ensures we catch duplicates regardless of which user is user1_id vs user2_id
+		var pairKey string
+		if requestingUserID < otherUserID {
+			pairKey = requestingUserID + ":" + otherUserID
+		} else {
+			pairKey = otherUserID + ":" + requestingUserID
+		}
+
+		existingMatch, exists := seenPairs[pairKey]
+		if exists {
+			duplicatesRemoved++
+			// Keep the match with the higher compatibility score (or newer if scores are equal)
+			if match.CompatibilityScore > existingMatch.CompatibilityScore {
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Replacing duplicate match with higher score\",\"user_id\":\"%s\",\"old_match_id\":\"%s\",\"old_score\":%.3f,\"new_match_id\":\"%s\",\"new_score\":%.3f,\"other_user_id\":\"%s\",\"pair_key\":\"%s\"}",
+					requestingUserID, existingMatch.ID, existingMatch.CompatibilityScore, match.ID, match.CompatibilityScore, otherUserID, pairKey)
+				seenPairs[pairKey] = match
+			} else if match.CompatibilityScore == existingMatch.CompatibilityScore {
+				// If scores are equal, keep the newer match
+				if match.CreatedAt.After(existingMatch.CreatedAt) {
+					log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Replacing duplicate match with same score (keeping newer)\",\"user_id\":\"%s\",\"old_match_id\":\"%s\",\"new_match_id\":\"%s\",\"score\":%.3f,\"other_user_id\":\"%s\",\"pair_key\":\"%s\"}",
+						requestingUserID, existingMatch.ID, match.ID, match.CompatibilityScore, otherUserID, pairKey)
+					seenPairs[pairKey] = match
+				} else {
+					log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Removing duplicate match with same score (keeping older)\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"score\":%.3f,\"kept_match_id\":\"%s\",\"other_user_id\":\"%s\",\"pair_key\":\"%s\"}",
+						requestingUserID, match.ID, match.CompatibilityScore, existingMatch.ID, otherUserID, pairKey)
+				}
+			} else {
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Removing duplicate match with lower score\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"score\":%.3f,\"kept_match_id\":\"%s\",\"kept_score\":%.3f,\"other_user_id\":\"%s\",\"pair_key\":\"%s\"}",
+					requestingUserID, match.ID, match.CompatibilityScore, existingMatch.ID, existingMatch.CompatibilityScore, otherUserID, pairKey)
+			}
+			continue
+		}
+
+		seenPairs[pairKey] = match
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Adding match to deduplication map\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"other_user_id\":\"%s\",\"pair_key\":\"%s\",\"score\":%.3f}",
+			requestingUserID, match.ID, otherUserID, pairKey, match.CompatibilityScore)
+	}
+
+	// Rebuild the list from seenPairs to ensure we have the best matches
+	deduplicatedMatches = make([]*models.PotentialMatch, 0, len(seenPairs))
+	for _, match := range seenPairs {
+		deduplicatedMatches = append(deduplicatedMatches, match)
+	}
+
+	if duplicatesRemoved > 0 {
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"GetPotentialMatches: Removed %d duplicate matches (kept best scores)\",\"user_id\":\"%s\",\"before_dedup\":%d,\"after_dedup\":%d}",
+			duplicatesRemoved, requestingUserID, len(dbMatches), len(deduplicatedMatches))
+	} else {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: No duplicates found\",\"user_id\":\"%s\",\"total_matches\":%d}",
+			requestingUserID, len(dbMatches))
+	}
+
+	dbMatches = deduplicatedMatches
+
+	// Filter out matches where a match request already exists (pending, accepted, or rejected)
+	// Once a user sends a request, they shouldn't see that person in potential matches anymore
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Filtering out users with existing match requests\",\"user_id\":\"%s\",\"matches_before_filter\":%d}",
+		userUUID.String(), len(dbMatches))
+
+	var filteredMatches []*models.PotentialMatch
+	var filteredByRequest int
+	for _, match := range dbMatches {
+		// Determine the other user ID
+		var otherUserID string
+		if match.User1ID == requestingUserID {
+			otherUserID = match.User2ID
+		} else {
+			otherUserID = match.User1ID
+		}
+
+		// Check if ANY match request exists between these users in either direction (excluding expired)
+		// This ensures that once a request is sent (in either direction), the match is removed from potential matches
+		hasRequest, err := h.matchingRepo.CheckAnyMatchRequestExists(r.Context(), requestingUserID, otherUserID)
+		if err != nil {
+			log.Printf("{\"severity\":\"WARN\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Error checking match request existence\",\"user_id\":\"%s\",\"other_user_id\":\"%s\",\"error\":\"%v\"}",
+				requestingUserID, otherUserID, err)
+			// If we can't check, include the match to be safe
+			filteredMatches = append(filteredMatches, match)
+			continue
+		}
+
+		if hasRequest {
+			filteredByRequest++
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Filtering out match (request exists in either direction)\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"other_user_id\":\"%s\"}",
+				requestingUserID, match.ID, otherUserID)
+			continue
+		}
+
+		// Check if they have an active carpool together for the same destination
+		// Get requesting user's current destination preferences to compare
+		requestingUserPrefs, err := h.matchingRepo.GetUserMatchingPreferences(r.Context(), requestingUserID)
+		if err == nil && requestingUserPrefs != nil {
+			// Check if they have an active carpool with the same destination
+			hasCarpoolSameDest, err := h.matchingRepo.CheckActiveCarpoolWithSameDestination(
+				r.Context(),
+				requestingUserID,
+				otherUserID,
+				requestingUserPrefs.DestinationLatitude,
+				requestingUserPrefs.DestinationLongitude,
+			)
+			if err != nil {
+				log.Printf("{\"severity\":\"WARN\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Error checking active carpool with same destination\",\"user_id\":\"%s\",\"other_user_id\":\"%s\",\"error\":\"%v\"}",
+					requestingUserID, otherUserID, err)
+				// If we can't check, include the match to be safe
+			} else if hasCarpoolSameDest {
+				filteredByRequest++
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Filtering out match (active carpool exists for same destination)\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"other_user_id\":\"%s\"}",
+					requestingUserID, match.ID, otherUserID)
+				continue
+			}
+		}
+
+		filteredMatches = append(filteredMatches, match)
+	}
+
+	if filteredByRequest > 0 {
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Filtered out %d matches with existing requests\",\"user_id\":\"%s\",\"before_filter\":%d,\"after_filter\":%d}",
+			filteredByRequest, requestingUserID, len(dbMatches), len(filteredMatches))
+	}
+
+	dbMatches = filteredMatches
+
+	// NOTE: We do NOT filter by MinCompatibilityScore - show ALL matches so user can decide
+	// The compatibility score is still included in the response for the user to see,
+	// but we don't hide matches based on it
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Showing ALL matches (no compatibility score filtering)\",\"user_id\":\"%s\",\"matches_count\":%d}",
+		userUUID.String(), len(dbMatches))
+
+	// Convert database matches to frontend format
+	var pendingMatchesFormatted []map[string]interface{}
+	for _, match := range dbMatches {
+		// Log each match being processed (with score for reference, but not filtering)
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Processing match (score shown but not filtered)\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"score\":\"%.3f\",\"user2_id\":\"%s\"}",
+			userUUID.String(), match.ID, match.CompatibilityScore, match.User2ID)
+
+		// Get user2's clerk_id and ensure user2 is loaded
+		var user2ClerkID string
+		if match.User2 == nil {
+			// Fetch user2 if not loaded
+			user2UUID, err := uuid.Parse(match.User2ID)
+			if err == nil {
+				user2, err := h.userRepo.GetUserByID(user2UUID)
+				if err == nil {
+					match.User2 = user2
+				}
+			}
+		}
+
+		if match.User2 != nil {
+			user2ClerkID = match.User2.ClerkID
+
+			// Prioritize display_name over name if display_name is set
+			// This helps distinguish users who might have the same name
+			originalName := match.User2.Name
+			if match.User2.DisplayName.Valid && match.User2.DisplayName.String != "" {
+				// Use display_name if available
+				match.User2.Name = match.User2.DisplayName.String
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Using display_name for user2\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"user2_id\":\"%s\",\"original_name\":\"%s\",\"display_name\":\"%s\"}",
+					userUUID.String(), match.ID, match.User2ID, originalName, match.User2.DisplayName.String)
+			} else {
+				// If display_name is not set and name might be duplicate,
+				// log this so we can identify users with same names
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Using name (no display_name set)\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"user2_id\":\"%s\",\"user2_clerk_id\":\"%s\",\"name\":\"%s\"}",
+					userUUID.String(), match.ID, match.User2ID, user2ClerkID, originalName)
+				// The frontend can use clerk_id or user ID to distinguish users with same name
+			}
+		}
+
+		// Calculate percentage values
+		compatibilityPercentage := match.CompatibilityScore * 100.0
+		var routeOverlapPercent float64
+		if match.RouteOverlapPercentage != nil {
+			routeOverlapPercent = *match.RouteOverlapPercentage
+		}
+
+		// Get schedule compatibility details
+		var scheduleDetails map[string]interface{}
+		if match.User2 != nil {
+			currentUser, err := h.userRepo.GetUserByID(userUUID)
+			if err == nil {
+				details := h.enhancedMatchingService.GetScheduleCompatibilityDetails(currentUser, match.User2)
+				scheduleScorePercent := details.CompatibilityScore * 100.0
+				scheduleDetails = map[string]interface{}{
+					"departure_time":           details.DepartureTime,
+					"frequency":                details.Frequency,
+					"flexibility_minutes":      details.FlexibilityMinutes,
+					"compatibility_score":      details.CompatibilityScore,
+					"compatibility_percentage": math.Round(scheduleScorePercent*10) / 10,
+				}
+			}
+		}
+		if scheduleDetails == nil {
+			// Fallback schedule details
+			scheduleDetails = map[string]interface{}{
+				"departure_time":           "8:00 AM",
+				"frequency":                "Daily",
+				"flexibility_minutes":      15,
+				"compatibility_score":      0.6,
+				"compatibility_percentage": 60.0,
+			}
+		}
+
+		matchData := map[string]interface{}{
+			"id":                          match.ID,
+			"user2":                       match.User2,
+			"user2_clerk_id":              user2ClerkID,
+			"compatibility_score":         match.CompatibilityScore,
+			"compatibility_percentage":    math.Round(compatibilityPercentage*10) / 10,
+			"route_overlap_percentage":    routeOverlapPercent,
+			"total_distance_miles":        match.TotalDistanceMiles,
+			"estimated_savings_per_month": match.EstimatedSavingsPerMonth,
+			"match_reasons":               match.MatchReasons,
+			"schedule":                    scheduleDetails,
+			"status":                      match.Status,
+			"expires_at":                  match.ExpiresAt,
+			"created_at":                  match.CreatedAt,
+		}
+
+		pendingMatchesFormatted = append(pendingMatchesFormatted, matchData)
+	}
+
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Returning %d matches (no score filtering)\",\"user_id\":\"%s\",\"matches_after_dedup\":%d}",
+		len(pendingMatchesFormatted), userUUID.String(), len(dbMatches))
+
+	// Log each match being returned for debugging
+	for i, match := range pendingMatchesFormatted {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Match %d details\",\"user_id\":\"%s\",\"match_index\":%d,\"match_id\":\"%v\",\"compatibility_score\":\"%v\",\"user2_clerk_id\":\"%v\"}",
+			i+1, userUUID.String(), i+1, match["id"], match["compatibility_score"], match["user2_clerk_id"])
+	}
+
+	// Return matches sorted by compatibility (already sorted by DB query)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"pending_matches":  scoredMatches,
+	response := map[string]interface{}{
+		"pending_matches":  pendingMatchesFormatted,
 		"accepted_matches": []interface{}{},
 		"expired_matches":  []interface{}{},
-	})
+	}
+
+	// Log the full response for debugging
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetPotentialMatches: Full response\",\"user_id\":\"%s\",\"pending_count\":%d,\"response_keys\":%v}",
+		userUUID.String(), len(pendingMatchesFormatted), []string{"pending_matches", "accepted_matches", "expired_matches"})
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetPotentialMatches: Error encoding response\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // 9. GET /api/matching/stats - Get comprehensive matching statistics
@@ -518,6 +762,17 @@ func (h *MatchingHandler) getFallbackStats() map[string]interface{} {
 
 // 4. POST /api/matching/find-matches - Force refresh matches
 func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
+	// Handle OPTIONS preflight request - CORS middleware should handle this, but add explicit handling
+	if r.Method == "OPTIONS" {
+		w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Timezone")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Max-Age", "300")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Log the route being called
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"🚀 ROUTE CALLED: /api/matching/find-matches\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\"}",
 		r.Method, r.URL.String(), r.RemoteAddr)
@@ -577,31 +832,37 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Processing request\",\"user_uuid\":\"%s\",\"max_results\":%d}", userUUID.String(), req.MaxResults)
 
 	// Get user's own preferences to check demographic compatibility
-	// Phase 3: Default to personal scope (companyID = nil)
-	var companyID *uuid.UUID = nil
-	userPrefs, err := h.matchingRepo.GetUserMatchingPreferences(r.Context(), userUUID.String(), companyID)
+	userPrefs, err := h.matchingRepo.GetUserMatchingPreferences(r.Context(), userUUID.String())
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error getting user preferences\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Use demographic compatibility if user has preferences, otherwise use basic matching
+	// Use FindCandidatesByPreferences to filter by destination and home location proximity
+	// This is the preferred method as it filters by destination, home location, and other preferences
 	var users []*models.User
-	if userPrefs != nil && len(userPrefs.DemographicPreferences.AgePreferences) > 0 {
-		log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using demographic compatibility matching\",\"user_uuid\":\"%s\"}", userUUID.String())
-		users, err = h.matchingRepo.GetDemographicallyCompatibleUsers(r.Context(), userUUID.String())
-		if err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetDemographicallyCompatibleUsers\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
-			// Fallback to basic matching if demographic query fails
-			log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Falling back to basic matching\",\"user_uuid\":\"%s\"}", userUUID.String())
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using FindCandidatesByPreferences for preference-driven matching\",\"user_uuid\":\"%s\"}", userUUID.String())
+	users, err = h.matchingRepo.FindCandidatesByPreferences(r.Context(), userUUID.String())
+	if err != nil {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"FindMatches: FindCandidatesByPreferences failed (may be missing destination), falling back to basic matching\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+		// Fallback to basic matching if preference-based query fails (e.g., no destination set)
+		// Use demographic compatibility if user has preferences, otherwise use basic matching
+		if userPrefs != nil && len(userPrefs.DemographicPreferences.AgePreferences) > 0 {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using demographic compatibility matching as fallback\",\"user_uuid\":\"%s\"}", userUUID.String())
+			users, err = h.matchingRepo.GetDemographicallyCompatibleUsers(r.Context(), userUUID.String())
+			if err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetDemographicallyCompatibleUsers\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+				// Final fallback to basic matching
+				log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Falling back to basic matching\",\"user_uuid\":\"%s\"}", userUUID.String())
+				users, err = h.matchingRepo.GetActiveUsersForMatching(r.Context(), userUUID.String())
+			}
+		} else {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using basic matching as fallback (no demographic preferences)\",\"user_uuid\":\"%s\"}", userUUID.String())
 			users, err = h.matchingRepo.GetActiveUsersForMatching(r.Context(), userUUID.String())
-		}
-	} else {
-		log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using basic matching (no demographic preferences)\",\"user_uuid\":\"%s\"}", userUUID.String())
-		users, err = h.matchingRepo.GetActiveUsersForMatching(r.Context(), userUUID.String())
-		if err != nil {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetActiveUsersForMatching\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+			if err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetActiveUsersForMatching\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+			}
 		}
 	}
 
@@ -612,6 +873,12 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Found %d compatible users for matching\",\"user_uuid\":\"%s\",\"compatible_users_count\":%d}", len(users), userUUID.String(), len(users))
+
+	// Log all candidate users found
+	for i, user := range users {
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindMatches: Candidate user %d\",\"user_uuid\":\"%s\",\"candidate_index\":%d,\"candidate_id\":\"%s\",\"candidate_name\":\"%s\",\"candidate_clerk_id\":\"%s\"}",
+			i+1, userUUID.String(), i+1, user.ID.String(), user.Name, user.ClerkID)
+	}
 
 	// Generate matches with improved algorithm
 	var matches []*models.PotentialMatch
@@ -633,6 +900,7 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Calculate REAL compatibility using enhanced matching service
+		// Service always exists (created even without Google Maps API, uses haversine fallback)
 		potentialMatch, err := h.enhancedMatchingService.CalculateRealCompatibility(currentUser, user)
 		if err != nil {
 			log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error calculating real compatibility\",\"user_uuid\":\"%s\",\"target_user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), user.ID.String(), err)
@@ -668,7 +936,12 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 		match := potentialMatch
 		match.User1ID = userUUID.String()
 		match.User2ID = user.ID.String()
-		match.Status = "active"
+		// Enhanced service sets status, but ensure it's "active" for potential matches
+		if match.Status == "" {
+			match.Status = "active"
+		} else if match.Status == "pending" {
+			match.Status = "active" // Convert pending to active for potential matches
+		}
 		match.ExpiresAt = time.Now().AddDate(0, 0, 7)
 
 		log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Real compatibility calculated\",\"user_uuid\":\"%s\",\"target_user_id\":\"%s\",\"compatibility_score\":%.3f,\"route_overlap\":%.1f,\"savings\":%.2f}",
@@ -683,7 +956,21 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 		}
 
 		matches = append(matches, match)
-		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindMatches: Successfully created potential match\",\"user_uuid\":\"%s\",\"target_user_id\":\"%s\",\"compatibility_score\":%.2f,\"matches_count\":%d}", userUUID.String(), user.ID.String(), match.CompatibilityScore, len(matches))
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindMatches: Successfully created potential match\",\"user_uuid\":\"%s\",\"target_user_id\":\"%s\",\"target_user_name\":\"%s\",\"target_user_clerk_id\":\"%s\",\"compatibility_score\":%.3f,\"route_overlap\":%v,\"matches_count\":%d}",
+			userUUID.String(), user.ID.String(), user.Name, user.ClerkID, match.CompatibilityScore, match.RouteOverlapPercentage, len(matches))
+	}
+
+	// Log summary of all matches created
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Created %d potential matches\",\"user_uuid\":\"%s\",\"total_matches\":%d}", len(matches), userUUID.String(), len(matches))
+	for i, match := range matches {
+		var user2ID string
+		if match.User2ID != "" {
+			user2ID = match.User2ID
+		} else {
+			user2ID = "unknown"
+		}
+		log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindMatches: Match %d summary\",\"user_uuid\":\"%s\",\"match_index\":%d,\"match_id\":\"%s\",\"user2_id\":\"%s\",\"compatibility_score\":%.3f,\"status\":\"%s\"}",
+			i+1, userUUID.String(), i+1, match.ID, user2ID, match.CompatibilityScore, match.Status)
 	}
 
 	// Update matching session
@@ -725,6 +1012,12 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 
 // 5. GET /api/matching/requests - Get incoming and outgoing requests
 func (h *MatchingHandler) GetMatchRequests(w http.ResponseWriter, r *http.Request) {
+	// Handle OPTIONS preflight request
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Log the route being called
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"🚀 ROUTE CALLED: /api/matching/requests\",\"method\":\"%s\",\"url\":\"%s\",\"remote_addr\":\"%s\"}",
 		r.Method, r.URL.String(), r.RemoteAddr)
@@ -776,9 +1069,7 @@ func (h *MatchingHandler) GetMatchRequests(w http.ResponseWriter, r *http.Reques
 
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetMatchRequests: Clerk ID converted to UUID\",\"clerk_id\":\"%s\",\"user_uuid\":\"%s\"}", userID, userUUID.String())
 
-	// Phase 3: Default to personal scope (companyID = nil)
-	var companyID *uuid.UUID = nil
-	incoming, outgoing, err := h.matchingRepo.GetMatchRequests(r.Context(), userUUID.String(), companyID)
+	incoming, outgoing, err := h.matchingRepo.GetMatchRequests(r.Context(), userUUID.String())
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetMatchRequests: Error getting match requests\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
 		// Return empty response instead of 500 error
@@ -981,10 +1272,13 @@ func (h *MatchingHandler) CreateMatchRequest(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if exists {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"CreateMatchRequest: Request already exists\",\"from_user_uuid\":\"%s\",\"to_user_id\":\"%s\"}", userUUID.String(), reqBody.ToUserID)
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"CreateMatchRequest: Request already exists - match will be filtered from potential matches\",\"from_user_uuid\":\"%s\",\"to_user_id\":\"%s\"}", userUUID.String(), reqBody.ToUserID)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]interface{}{"error": "duplicate_pending_request", "message": "A pending request already exists."})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "duplicate_request",
+			"message": "A match request already exists between you and this user. This match has been removed from your potential matches.",
+		})
 		return
 	}
 
@@ -1015,6 +1309,17 @@ func (h *MatchingHandler) CreateMatchRequest(w http.ResponseWriter, r *http.Requ
 
 	err = h.matchingRepo.CreateMatchRequest(r.Context(), matchRequest)
 	if err != nil {
+		// Check if it's a duplicate request error
+		if strings.Contains(err.Error(), "duplicate_request") {
+			log.Printf("{\"severity\":\"WARN\",\"message\":\"CreateMatchRequest: Duplicate request detected (database constraint) - match will be filtered from potential matches\",\"from_user_uuid\":\"%s\",\"to_user_id\":\"%s\"}", userUUID.String(), reqBody.ToUserID)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":   "duplicate_request",
+				"message": "A match request already exists between you and this user. This match has been removed from your potential matches.",
+			})
+			return
+		}
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"CreateMatchRequest: Error creating match request\",\"from_user_uuid\":\"%s\",\"to_user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), reqBody.ToUserID, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -1076,9 +1381,7 @@ func (h *MatchingHandler) UpdateMatchRequest(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Authorization: Check if user is the recipient of the request
-	// Phase 3: Default to personal scope (companyID = nil)
-	var companyID *uuid.UUID = nil
-	request, err := h.matchingRepo.GetMatchRequestByID(r.Context(), requestID, companyID)
+	request, err := h.matchingRepo.GetMatchRequestByID(r.Context(), requestID)
 	if err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateMatchRequest: Error getting match request\",\"user_uuid\":\"%s\",\"request_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), requestID, err)
 		http.Error(w, "Request not found", http.StatusNotFound)
@@ -1436,23 +1739,12 @@ func (h *MatchingHandler) createCarpoolFromMatchRequest(ctx context.Context, req
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Creating carpool from match request\",\"request_id\":\"%s\",\"from_user\":\"%s\",\"to_user\":\"%s\"}", request.ID, request.FromUserID, request.ToUserID)
 
 	// Get both users' preferences to determine carpool details
-	// Phase 3: Default to personal scope (companyID = nil)
-	// TODO: Phase 7 - Use company_id from match_request if it's a company request
-	var companyID *uuid.UUID = nil
-	if request.CompanyID != nil {
-		// If match request has company_id, use it for preferences lookup
-		parsedCompanyID, err := uuid.Parse(*request.CompanyID)
-		if err == nil {
-			companyID = &parsedCompanyID
-		}
-	}
-
-	fromUserPrefs, err := h.matchingRepo.GetUserMatchingPreferences(ctx, request.FromUserID, companyID)
+	fromUserPrefs, err := h.matchingRepo.GetUserMatchingPreferences(ctx, request.FromUserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get from user preferences: %v", err)
 	}
 
-	toUserPrefs, err := h.matchingRepo.GetUserMatchingPreferences(ctx, request.ToUserID, companyID)
+	toUserPrefs, err := h.matchingRepo.GetUserMatchingPreferences(ctx, request.ToUserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get to user preferences: %v", err)
 	}
@@ -1464,10 +1756,16 @@ func (h *MatchingHandler) createCarpoolFromMatchRequest(ctx context.Context, req
 	carpoolName := request.CarpoolName
 
 	// Calculate available seats using the preferred carpool size from the match request
-	// The sender specified their preferred carpool size, so we use that
-	availableSeats := request.PreferredCarpoolSize - 2 // Reserve 2 seats for creator + accepter
+	// The sender specified their preferred carpool size (total seats in the car)
+	// IMPORTANT: We set availableSeats = PreferredCarpoolSize initially because AddCarpoolMemberByAPI
+	// automatically decrements available_seats by 1 each time a member is added.
+	// Since we'll add 2 members (creator + accepter), the final available seats will be:
+	//   - PreferredCarpoolSize = 4 → Initial: 4, After adding 2 members: 4 - 1 - 1 = 2 ✓
+	//   - PreferredCarpoolSize = 5 → Initial: 5, After adding 2 members: 5 - 1 - 1 = 3 ✓
+	//   - PreferredCarpoolSize = 6 → Initial: 6, After adding 2 members: 6 - 1 - 1 = 4 ✓
+	availableSeats := request.PreferredCarpoolSize
 	if availableSeats < 0 {
-		availableSeats = 0 // Minimum 0 available seats
+		availableSeats = 0 // Minimum 0 available seats (safety check for edge cases)
 	}
 
 	// Create the carpool with merged preferences
@@ -1572,7 +1870,6 @@ func (h *MatchingHandler) createCarpoolSchedule(ctx context.Context, carpoolID u
 		}
 
 		// Create the schedule for this day
-		// Phase 3: Set company_id and site_id from carpool (will be populated by CreateCarpoolSchedule)
 		schedule := &models.CarpoolSchedule{
 			ID:           uuid.New(),
 			CarpoolID:    carpoolID,
@@ -1581,9 +1878,8 @@ func (h *MatchingHandler) createCarpoolSchedule(ctx context.Context, carpoolID u
 			EndDate:      &endDate,            // 90 days from start
 			DayOfWeek:    dayOfWeek,
 			StartTime:    time.Date(2000, 1, 1, startTime.Hour(), startTime.Minute(), 0, 0, loc),
-			// CompanyID and SiteID will be populated from carpool by CreateCarpoolSchedule
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
 		}
 
 		// Create the schedule in database

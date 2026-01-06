@@ -3,6 +3,7 @@ package main
 import (
 	"car-backend/pkg/handlers"
 	"car-backend/pkg/repository"
+	"car-backend/pkg/services"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -138,7 +139,7 @@ func setupClerk() {
 	clerk.SetKey(clerkSecretKey)
 }
 
-func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler, scheduleHandler *handlers.CarpoolScheduleHandler, locationHandler *handlers.LocationHandler, inviteLinkHandler *handlers.InviteLinkHandler) *mux.Router {
+func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *handlers.CarPoolHandler, inviteHandler *handlers.InviteHandler, carpoolRideHandler *handlers.CarPoolRideHandler, webhookHandler *handlers.WebhookHandler, scheduleHandler *handlers.CarpoolScheduleHandler, locationHandler *handlers.LocationHandler, inviteLinkHandler *handlers.InviteLinkHandler, matchingHandler *handlers.MatchingHandler) *mux.Router {
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Setting up router\"}")
 
 	r := mux.NewRouter()
@@ -175,6 +176,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 
 	// Protected routes
 	protected := r.PathPrefix("/api").Subrouter()
+	// Clerk middleware validates JWT tokens from Authorization header
 	protected.Use(clerkhttp.WithHeaderAuthorization())
 	protected.Use(middleware.AuthMiddleware(db))
 
@@ -247,6 +249,18 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/activity", userHandler.GetUserActivities).Methods("GET")
 	protected.HandleFunc("/carpools/{carpoolID}/days/{date}/participants", carpoolRideHandler.GetRideByCarpoolAndDateParticipants).Methods("GET")
 
+	// Matching routes
+	protected.HandleFunc("/matching/preferences", matchingHandler.GetUserMatchingPreferences).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/matching/preferences", matchingHandler.UpdateUserMatchingPreferences).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/matching/requests", matchingHandler.GetMatchRequests).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/matching/request", matchingHandler.CreateMatchRequest).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/matching/request/{requestId}", matchingHandler.UpdateMatchRequest).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/matching/requests/{requestId}", matchingHandler.UpdateMatchRequest).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/matching/potential-matches", matchingHandler.GetPotentialMatches).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/matching/find-matches", matchingHandler.FindMatches).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/matching/stats", matchingHandler.GetMatchingStats).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/matching/session", matchingHandler.GetMatchingSession).Methods("GET", "OPTIONS")
+
 	return r
 }
 
@@ -279,6 +293,7 @@ func main() {
 			"http://localhost:3001",
 			"http://localhost:8080",
 			"https://car-backend-latest-884945568547.us-west1.run.app",
+			"https://carpooly-web-git-development-nikhils-projects-cc1fa59f.vercel.app",
 		},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowedHeaders: []string{
@@ -291,12 +306,13 @@ func main() {
 			"Access-Control-Request-Headers",
 			"X-User-Timezone",
 		},
-		ExposedHeaders:       []string{"Content-Length"},
+		ExposedHeaders:       []string{"Content-Length", "Content-Type"},
 		AllowCredentials:     true,
 		Debug:                true,
 		MaxAge:               300,           // Maximum cache time for preflight requests
-		OptionsPassthrough:   false,         // Change this to false
-		OptionsSuccessStatus: http.StatusOK, // Add this line
+		OptionsPassthrough:   false,         // Don't pass through OPTIONS to handler
+		OptionsSuccessStatus: http.StatusOK, // Success status for OPTIONS
+		AllowOriginFunc:      nil,           // Use AllowedOrigins list
 	})
 
 	// Add debug logging
@@ -316,6 +332,26 @@ func main() {
 	scheduleRepo := repository.NewCarpoolScheduleRepository(db)
 	locationRepo := repository.NewLocationRepository(db)
 	inviteLinkRepo := repository.NewInviteLinkRepository(db)
+	matchingRepo := repository.NewMatchingRepository(db)
+
+	// Initialize services for matching
+	// Note: EnhancedMatchingService can work without Google Maps API (uses haversine fallback)
+	var routeService *services.RouteService
+	googleMapsAPIKey := os.Getenv("GOOGLE_MAPS_API_KEY")
+	if googleMapsAPIKey != "" {
+		var err error
+		routeService, err = services.NewRouteService(googleMapsAPIKey)
+		if err != nil {
+			log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to initialize RouteService: %v, using fallback calculations\"}", err)
+		} else {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"RouteService initialized with Google Maps API\"}")
+		}
+	} else {
+		log.Printf("{\"severity\":\"INFO\",\"message\":\"GOOGLE_MAPS_API_KEY not set, using haversine distance calculations (no API calls)\"}")
+	}
+	// Always create enhanced matching service - it has fallbacks built in
+	enhancedMatchingService := services.NewEnhancedMatchingService(routeService)
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"EnhancedMatchingService initialized (routeService: %v)\"}", routeService != nil)
 
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(userRepo)
@@ -326,8 +362,9 @@ func main() {
 	scheduleHandler := handlers.NewCarpoolScheduleHandler(scheduleRepo, carpoolRepo, carpoolRideRepo, userRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo, userRepo)
 	inviteLinkHandler := handlers.NewInviteLinkHandler(inviteLinkRepo, userRepo, carpoolRepo)
+	matchingHandler := handlers.NewMatchingHandler(matchingRepo, userRepo, carpoolRepo, scheduleRepo, carpoolRideRepo, routeService, enhancedMatchingService)
 
-	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler, locationHandler, inviteLinkHandler)
+	router := setupRouter(db, userHandler, carpoolHandler, inviteHandler, carpoolRideHandler, webhookHandler, scheduleHandler, locationHandler, inviteLinkHandler, matchingHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {

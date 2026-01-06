@@ -3,21 +3,13 @@ package middleware
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/MicahParks/keyfunc/v2"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/clerk/clerk-sdk-go/v2"
 )
-
-type UserClaims struct {
-	jwt.RegisteredClaims
-	EmailAddress string `json:"email"`
-}
 
 type authContextKey int
 
@@ -40,28 +32,6 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 }
 
 func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
-	// Get JWKS URL from environment variable
-	jwksURL := os.Getenv("CLERK_JWKS_URL")
-	if jwksURL == "" {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"CLERK_JWKS_URL environment variable not set\"}")
-		return func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, "Server configuration error", http.StatusInternalServerError)
-			})
-		}
-	}
-
-	log.Printf("{\"severity\":\"INFO\",\"message\":\"Initializing auth middleware\",\"jwks_url\":\"%s\"}", jwksURL)
-
-	// Create the JWKS from the URL
-	jwks, err := keyfunc.Get(jwksURL, keyfunc.Options{
-		RefreshInterval: time.Hour,
-	})
-	if err != nil {
-		log.Printf("{\"severity\":\"FATAL\",\"message\":\"Failed to create JWKS from URL\",\"error\":\"%v\"}", err)
-		panic(fmt.Sprintf("Failed to create JWKS from URL: %v", err))
-	}
-
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Request received\",\"path\":\"%s\",\"method\":\"%s\"}",
@@ -85,67 +55,44 @@ func AuthMiddleware(db *sql.DB) func(http.Handler) http.Handler {
 
 			log.Printf("{\"severity\":\"INFO\",\"message\":\"Starting AuthMiddleware\",\"path\":\"%s\"}", r.URL.Path)
 
-			// Log the entire request for debugging
-			for name, values := range r.Header {
-				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Header\",\"name\":\"%s\",\"value\":\"%s\"}",
-					name, values[0])
-			}
-
-			// Get the Authorization header
-			authHeader := r.Header.Get("Authorization")
-			//log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Auth header received\",\"header\":\"%s\"}", authHeader)
-
-			if authHeader == "" {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"No Authorization header provided\"}")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			// Check for Authorization header
-			if !strings.HasPrefix(authHeader, "Bearer ") {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid auth header format\"}")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Auth header received\",\"header\":\"%s\"}", authHeader)
-
-			// Extract token
-			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-
-			// Parse and validate the token
-			token, err := jwt.Parse(tokenString, jwks.Keyfunc)
-			if err != nil || !token.Valid {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Token validation failed\",\"error\":\"%v\",\"token_valid\":%v}",
-					err, token != nil && token.Valid)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Token validated successfully\"}")
-
-			// Extract claims
-			claims, ok := token.Claims.(jwt.MapClaims)
-			if !ok {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"Invalid claims format\"}")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			// Get user info from claims
-			userID, ok := claims["sub"].(string)
-			if !ok {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"No user ID in claims\"}")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Claims extracted\",\"user_id\":\"%s\"}", userID)
-
-			// Add user info to context
+			// First, check if Clerk's claims are already in the context (from Clerk's middleware)
 			ctx := r.Context()
-			ctx = context.WithValue(ctx, userIDKey, userID)
-			if email, ok := claims["email"].(string); ok {
-				ctx = context.WithValue(ctx, emailKey, email)
+			clerkClaims, hasClerkClaims := clerk.SessionClaimsFromContext(ctx)
+			
+			// Log authorization header for debugging (without the actual token)
+			authHeader := r.Header.Get("Authorization")
+			if authHeader != "" {
+				if strings.HasPrefix(authHeader, "Bearer ") {
+					previewLen := 20
+					if len(authHeader) < previewLen {
+						previewLen = len(authHeader)
+					}
+					tokenPreview := authHeader[:previewLen] + "..."
+					log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Authorization header present\",\"preview\":\"%s\",\"length\":%d}", tokenPreview, len(authHeader))
+				} else {
+					log.Printf("{\"severity\":\"WARNING\",\"message\":\"Authorization header missing Bearer prefix\"}")
+				}
+			} else {
+				log.Printf("{\"severity\":\"WARNING\",\"message\":\"No Authorization header found\"}")
 			}
+			
+			if !hasClerkClaims {
+				// Log detailed error information
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"No Clerk claims in context - Clerk middleware may have failed\",\"path\":\"%s\",\"method\":\"%s\",\"has_auth_header\":%t}", 
+					r.URL.Path, r.Method, authHeader != "")
+				
+				// Check if CLERK_SECRET_KEY is set (without logging the actual value)
+				clerkKeySet := os.Getenv("CLERK_SECRET_KEY") != ""
+				log.Printf("{\"severity\":\"DEBUG\",\"message\":\"CLERK_SECRET_KEY is set\",\"is_set\":%t}", clerkKeySet)
+				
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Get user ID from Clerk's claims
+			userID := clerkClaims.Subject
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Clerk claims found\",\"user_id\":\"%s\"}", userID)
+			ctx = context.WithValue(ctx, userIDKey, userID)
 
 			// Extract timezone from header
 			timezone := r.Header.Get("X-User-Timezone")
