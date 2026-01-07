@@ -196,8 +196,8 @@ func (r *CarPoolRideRepository) UpdateCarpoolRideStatus(ctx context.Context, rid
 
 func (r *CarPoolRideRepository) GetUserActiveRides(ctx context.Context, userID string) ([]models.CarpoolRide, error) {
 	query := `
-        SELECT DISTINCT cr.id, cr.carpool_id, cr.driver_id, cr.status, 
-               cr.location_lat, cr.location_lng, cr.miles_saved, 
+        SELECT DISTINCT cr.id, cr.carpool_id, cr.driver_id, cr.start_time, cr.status, 
+               cr.location_lat, cr.location_lng, cr.miles_saved, cr.participants,
                cr.created_at, cr.updated_at
         FROM carpool_rides cr
         JOIN carpools c ON cr.carpool_id = c.id
@@ -218,20 +218,56 @@ func (r *CarPoolRideRepository) GetUserActiveRides(ctx context.Context, userID s
 	var rides []models.CarpoolRide
 	for rows.Next() {
 		var ride models.CarpoolRide
+		var participantsJSON []byte
+		var locationLat, locationLng, milesSaved sql.NullFloat64
+		var driverID sql.NullString
+		var startTime sql.NullTime
+
 		err := rows.Scan(
 			&ride.ID,
 			&ride.CarpoolID,
-			&ride.DriverID,
+			&driverID,
+			&startTime,
 			&ride.Status,
-			&ride.LocationLat,
-			&ride.LocationLng,
-			&ride.MilesSaved,
+			&locationLat,
+			&locationLng,
+			&milesSaved,
+			&participantsJSON,
 			&ride.CreatedAt,
 			&ride.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan ride: %v", err)
 		}
+
+		// Handle NULL values
+		if locationLat.Valid {
+			ride.LocationLat = &locationLat.Float64
+		}
+		if locationLng.Valid {
+			ride.LocationLng = &locationLng.Float64
+		}
+		if milesSaved.Valid {
+			ride.MilesSaved = &milesSaved.Float64
+		}
+		if driverID.Valid {
+			parsedDriverID, _ := uuid.Parse(driverID.String)
+			ride.DriverID = &parsedDriverID
+		}
+		if startTime.Valid {
+			ride.StartTime = startTime.Time
+		}
+
+		// Parse participants JSON
+		if len(participantsJSON) > 0 {
+			if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
+				log.Printf("{\"severity\":\"WARN\",\"message\":\"Failed to unmarshal participants\",\"ride_id\":\"%s\",\"error\":\"%v\"}", ride.ID, err)
+				ride.Participants = []models.User{}
+			}
+		} else {
+			ride.Participants = []models.User{}
+		}
+
 		rides = append(rides, ride)
 	}
 

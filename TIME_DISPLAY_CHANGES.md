@@ -197,7 +197,7 @@ ride.StartTimeISO = ride.StartTime.Format(time.RFC3339)
 ### 10. **Handler Layer - GetActiveRides** (`pkg/handlers/carpoolRides_handlers.go`)
 
 **File:** `pkg/handlers/carpoolRides_handlers.go`  
-**Location:** Line 575-624 (GetActiveRides handler)
+**Location:** Line 574-624 (GetActiveRides handler)
 
 **Current State:**
 - ✅ Already calls repository which returns rides with time
@@ -209,7 +209,84 @@ ride.StartTimeISO = ride.StartTime.Format(time.RFC3339)
 
 ---
 
-### 11. **Handler Layer - CreateCarpoolRide** (`pkg/handlers/carpoolRides_handlers.go`)
+### 10b. **Handler Layer - GetUserActiveRides** (`pkg/handlers/carpoolRides_handlers.go`)
+
+**File:** `pkg/handlers/carpoolRides_handlers.go`  
+**Location:** Line 281-316 (GetUserActiveRides handler)
+
+**Current State:**
+- ⚠️ **ISSUE FOUND:** Repository method `GetUserActiveRides` does NOT fetch `start_time` from database!
+- ❌ Repository query missing `start_time` and `participants` fields (line 199-201 in repository)
+- ❌ Handler returns rides without `start_time` (line 315)
+
+**CHANGE NEEDED:** ❌ **REQUIRED CHANGE** - Must fix repository method to fetch `start_time`.
+
+**Required Fix in Repository** (`pkg/repository/carpoolRide_repository.go`, line 197-240):
+```go
+// CURRENT (WRONG):
+query := `
+    SELECT DISTINCT cr.id, cr.carpool_id, cr.driver_id, cr.status, 
+           cr.location_lat, cr.location_lng, cr.miles_saved, 
+           cr.created_at, cr.updated_at
+    FROM carpool_rides cr
+    ...
+`
+
+// FIXED (CORRECT):
+query := `
+    SELECT DISTINCT cr.id, cr.carpool_id, cr.driver_id, cr.start_time, cr.status, 
+           cr.location_lat, cr.location_lng, cr.miles_saved, cr.participants,
+           cr.created_at, cr.updated_at
+    FROM carpool_rides cr
+    ...
+`
+
+// Also need to scan start_time and participants:
+var startTime sql.NullTime
+var participantsJSON []byte
+err := rows.Scan(
+    &ride.ID,
+    &ride.CarpoolID,
+    &ride.DriverID,
+    &startTime,  // ADD THIS
+    &ride.Status,
+    &ride.LocationLat,
+    &ride.LocationLng,
+    &ride.MilesSaved,
+    &participantsJSON,  // ADD THIS
+    &ride.CreatedAt,
+    &ride.UpdatedAt,
+)
+
+// Handle NULL values
+if startTime.Valid {
+    ride.StartTime = startTime.Time
+}
+if len(participantsJSON) > 0 {
+    json.Unmarshal(participantsJSON, &ride.Participants)
+}
+```
+
+**OPTIONAL ENHANCEMENT:** If adding formatted time strings, populate them before encoding (after line 313).
+
+---
+
+### 11. **Handler Layer - GetUserCompletedRides** (`pkg/handlers/carpoolRides_handlers.go`)
+
+**File:** `pkg/handlers/carpoolRides_handlers.go`  
+**Location:** Line 760-844 (GetUserCompletedRides handler)
+
+**Current State:**
+- ✅ Already calls repository which returns rides with time
+- ✅ Already encodes and returns array of rides with `start_time` included (line 834)
+
+**CHANGE NEEDED:** ✅ **NO CHANGE** - Time is already being returned.
+
+**OPTIONAL ENHANCEMENT:** If adding formatted time strings, populate them before encoding (after line 826).
+
+---
+
+### 12. **Handler Layer - CreateCarpoolRide** (`pkg/handlers/carpoolRides_handlers.go`)
 
 **File:** `pkg/handlers/carpoolRides_handlers.go`  
 **Location:** Line 40-111 (CreateCarpoolRide handler)
@@ -224,7 +301,7 @@ ride.StartTimeISO = ride.StartTime.Format(time.RFC3339)
 
 ---
 
-### 12. **Handler Layer - UpdateCarpoolRideDriver** (`pkg/handlers/carpoolRides_handlers.go`)
+### 13. **Handler Layer - UpdateCarpoolRideDriver** (`pkg/handlers/carpoolRides_handlers.go`)
 
 **File:** `pkg/handlers/carpoolRides_handlers.go`  
 **Location:** Line 460-510 (UpdateCarpoolRideDriver handler)
@@ -239,7 +316,22 @@ ride.StartTimeISO = ride.StartTime.Format(time.RFC3339)
 
 ---
 
-### 13. **Route Registration** (`main.go`)
+### 14. **Handler Layer - AddParticipantToRide** (`pkg/handlers/carpoolRides_handlers.go`)
+
+**File:** `pkg/handlers/carpoolRides_handlers.go`  
+**Location:** Line 671-758 (AddParticipantToRide handler)
+
+**Current State:**
+- ✅ Fetches updated ride via `GetCarpoolRide` which includes time
+- ✅ Already encodes and returns ride with `start_time` included (line 748)
+
+**CHANGE NEEDED:** ✅ **NO CHANGE** - Time is already being returned.
+
+**OPTIONAL ENHANCEMENT:** If adding formatted time strings, populate them before encoding (after line 747).
+
+---
+
+### 15. **Route Registration** (`main.go`)
 
 **File:** `main.go`  
 **Location:** Line 250 (GetRideByCarpoolAndDateParticipants route)
@@ -267,15 +359,16 @@ If you want to add user-friendly formatted time strings to make frontend integra
 1. **Add fields to model** (`pkg/models/carpool.go`):
    - Add `StartTimeFormatted string` and `StartTimeISO string` fields
 
-2. **Populate formatted strings in handlers** (8 locations):
+2. **Populate formatted strings in handlers** (9 locations):
    - `GetCarpoolRide` (line 163)
    - `GetCarpoolRidesByDate` (line 452)
    - `GetRideByCarpoolAndDateParticipants` (line 659) ⚠️ **MOST IMPORTANT - This is the modal endpoint**
    - `GetAllRidesForCarpool` (line 863)
    - `GetActiveRides` (line 620)
+   - `GetUserActiveRides` (line 313) ⚠️ **REQUIRES FIX FIRST** - Repository must fetch `start_time`
+   - `GetUserCompletedRides` (line 826)
    - `CreateCarpoolRide` (line 106)
-   - `UpdateCarpoolRideDriver` (line 748)
-   - Any other handlers that return `CarpoolRide`
+   - `UpdateCarpoolRideDriver` / `AddParticipantToRide` (line 748)
 
 ### 🎯 **Recommended Approach:**
 
@@ -294,11 +387,19 @@ If you want to add user-friendly formatted time strings to make frontend integra
 ## Verification Checklist
 
 - [x] `CarpoolRide` model includes `StartTime` field
-- [x] All repository methods fetch `start_time` from database
-- [x] All handlers return rides with `start_time` included
+- [x] Most repository methods fetch `start_time` from database
+- [ ] ⚠️ **GetUserActiveRides repository method** - MISSING `start_time` in query (REQUIRES FIX)
+- [x] Most handlers return rides with `start_time` included
+- [ ] ⚠️ **GetUserActiveRides handler** - Returns rides without `start_time` (REQUIRES FIX)
 - [x] Route for modal endpoint is registered correctly
 - [ ] Frontend displays `start_time` from API response (FRONTEND TASK)
 - [ ] Frontend formats time appropriately (FRONTEND TASK)
+
+## ⚠️ CRITICAL ISSUE FOUND
+
+**`GetUserActiveRides` repository method is missing `start_time`!**
+
+This endpoint (`/api/active-ride/user_{userID}`) will NOT return time information until fixed.
 
 ---
 
