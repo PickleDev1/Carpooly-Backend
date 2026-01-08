@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -195,83 +196,311 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"UpdateUserMatchingPreferences: Clerk ID converted to UUID\",\"clerk_id\":\"%s\",\"user_uuid\":\"%s\"}", userID, userUUID.String())
 
+	// Decode request body to detect which fields were actually provided
+	// We need to distinguish between "field not sent" vs "field sent as empty/zero"
+	var requestBody map[string]interface{}
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Failed to read request body\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Parse as map first to check which fields are present
+	if err := json.Unmarshal(bodyBytes, &requestBody); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Failed to parse request body\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Track which fields were provided in the request
+	fieldsProvided := make(map[string]bool)
+	for key := range requestBody {
+		fieldsProvided[key] = true
+	}
+
+	// Now decode into the struct
 	var prefs models.UserMatchingPreferences
-	if err := json.NewDecoder(r.Body).Decode(&prefs); err != nil {
+	if err := json.Unmarshal(bodyBytes, &prefs); err != nil {
 		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Failed to decode request body\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Apply frontend simplification defaults
-	if prefs.ScheduleFlexibilityMinutes == 0 {
-		prefs.ScheduleFlexibilityMinutes = 30 // Default for simplified UI
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Fields provided in request\",\"user_id\":\"%s\",\"fields\":%v}", userUUID.String(), fieldsProvided)
+
+	// ============================================================================
+	// REQUIRED FIELD VALIDATION (Basic Preferences)
+	// These fields are REQUIRED for simplified preferences system
+	// ============================================================================
+
+	// Validate destination_latitude (REQUIRED)
+	if prefs.DestinationLatitude == nil || *prefs.DestinationLatitude == 0.0 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Missing required destination_latitude\",\"user_id\":\"%s\"}", userUUID.String())
+		http.Error(w, "destination_latitude is required and must be non-zero", http.StatusBadRequest)
+		return
 	}
-	if prefs.MinCompatibilityScore == 0.0 {
-		prefs.MinCompatibilityScore = 0.7 // Default for simplified UI
+	if *prefs.DestinationLatitude < -90 || *prefs.DestinationLatitude > 90 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid destination_latitude\",\"user_id\":\"%s\",\"value\":%.6f}", userUUID.String(), *prefs.DestinationLatitude)
+		http.Error(w, "destination_latitude must be between -90 and 90", http.StatusBadRequest)
+		return
 	}
 
-	// Ensure student_status has default value for simplified UI
-	if prefs.UserDemographics.StudentStatus == "" {
-		prefs.UserDemographics.StudentStatus = "not_student"
+	// Validate destination_longitude (REQUIRED)
+	if prefs.DestinationLongitude == nil || *prefs.DestinationLongitude == 0.0 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Missing required destination_longitude\",\"user_id\":\"%s\"}", userUUID.String())
+		http.Error(w, "destination_longitude is required and must be non-zero", http.StatusBadRequest)
+		return
 	}
+	if *prefs.DestinationLongitude < -180 || *prefs.DestinationLongitude > 180 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid destination_longitude\",\"user_id\":\"%s\",\"value\":%.6f}", userUUID.String(), *prefs.DestinationLongitude)
+		http.Error(w, "destination_longitude must be between -180 and 180", http.StatusBadRequest)
+		return
+	}
+
+	// Validate arrival_time (REQUIRED)
+	if prefs.ArrivalTime == nil || *prefs.ArrivalTime == "" {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Missing required arrival_time\",\"user_id\":\"%s\"}", userUUID.String())
+		http.Error(w, "arrival_time is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate commute_days (REQUIRED - at least one day)
+	if len(prefs.CommuteDays) == 0 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Missing required commute_days (at least one day required)\",\"user_id\":\"%s\"}", userUUID.String())
+		http.Error(w, "commute_days is required and must contain at least one day", http.StatusBadRequest)
+		return
+	}
+	allowedDays := map[string]struct{}{"mon": {}, "tue": {}, "wed": {}, "thu": {}, "fri": {}, "sat": {}, "sun": {}}
+	for _, d := range prefs.CommuteDays {
+		if _, ok := allowedDays[d]; !ok {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid commute day\",\"user_id\":\"%s\",\"day\":\"%s\"}", userUUID.String(), d)
+			http.Error(w, "commute_days must be any of: mon,tue,wed,thu,fri,sat,sun", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// ============================================================================
+	// OPTIONAL FIELD VALIDATION (Advanced Preferences)
+	// These fields are OPTIONAL - preserve existing values if not provided
+	// ============================================================================
+
+	// Get existing preferences to preserve advanced fields if user didn't provide them
+	// This supports the toggle behavior: if advanced section is collapsed, preserve existing values
+	existingPrefs, err := h.matchingRepo.GetUserMatchingPreferences(r.Context(), userUUID.String())
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"UpdateUserMatchingPreferences: Could not get existing preferences, will use defaults\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+		existingPrefs = nil
+	}
+
+	// Apply defaults or preserve existing values for optional advanced fields
+	// Use fieldsProvided map to determine if field was actually sent in request
+	// If field NOT in request AND existing preferences exist → preserve existing value
+	// If field NOT in request AND no existing preferences → use default
+	// If field IS in request → use provided value (even if 0/empty)
+
+	if !fieldsProvided["max_detour_minutes"] {
+		// Field not provided - preserve existing or use default
+		if existingPrefs != nil && existingPrefs.MaxDetourMinutes > 0 {
+			prefs.MaxDetourMinutes = existingPrefs.MaxDetourMinutes // Preserve existing
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving max_detour_minutes\",\"user_id\":\"%s\",\"value\":%d}", userUUID.String(), prefs.MaxDetourMinutes)
+		} else {
+			prefs.MaxDetourMinutes = 15 // Default for simplified UI
+		}
+	}
+	if !fieldsProvided["preferred_group_size"] {
+		// Field not provided - preserve existing or use default
+		if existingPrefs != nil && existingPrefs.PreferredGroupSize > 0 {
+			prefs.PreferredGroupSize = existingPrefs.PreferredGroupSize // Preserve existing
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving preferred_group_size\",\"user_id\":\"%s\",\"value\":%d}", userUUID.String(), prefs.PreferredGroupSize)
+		} else {
+			prefs.PreferredGroupSize = 4 // Default for simplified UI
+		}
+	}
+	if !fieldsProvided["schedule_flexibility_minutes"] {
+		// Field not provided - preserve existing or use default
+		if existingPrefs != nil && existingPrefs.ScheduleFlexibilityMinutes > 0 {
+			prefs.ScheduleFlexibilityMinutes = existingPrefs.ScheduleFlexibilityMinutes // Preserve existing
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving schedule_flexibility_minutes\",\"user_id\":\"%s\",\"value\":%d}", userUUID.String(), prefs.ScheduleFlexibilityMinutes)
+		} else {
+			prefs.ScheduleFlexibilityMinutes = 30 // Default for simplified UI
+		}
+	}
+	if !fieldsProvided["max_pickup_distance_miles"] {
+		// Field not provided - preserve existing or use default
+		if existingPrefs != nil && existingPrefs.MaxPickupDistanceMiles > 0.0 {
+			prefs.MaxPickupDistanceMiles = existingPrefs.MaxPickupDistanceMiles // Preserve existing
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving max_pickup_distance_miles\",\"user_id\":\"%s\",\"value\":%.2f}", userUUID.String(), prefs.MaxPickupDistanceMiles)
+		} else {
+			prefs.MaxPickupDistanceMiles = 5.0 // Default for simplified UI
+		}
+	}
+	if !fieldsProvided["min_compatibility_score"] {
+		// Field not provided - preserve existing or use default
+		if existingPrefs != nil && existingPrefs.MinCompatibilityScore > 0.0 {
+			prefs.MinCompatibilityScore = existingPrefs.MinCompatibilityScore // Preserve existing
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving min_compatibility_score\",\"user_id\":\"%s\",\"value\":%.2f}", userUUID.String(), prefs.MinCompatibilityScore)
+		} else {
+			prefs.MinCompatibilityScore = 0.7 // Default for simplified UI
+		}
+	}
+	if !fieldsProvided["driver_preference"] {
+		// Field not provided - preserve existing or use default
+		if existingPrefs != nil && existingPrefs.DriverPreference != "" {
+			prefs.DriverPreference = existingPrefs.DriverPreference // Preserve existing
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving driver_preference\",\"user_id\":\"%s\",\"value\":\"%s\"}", userUUID.String(), prefs.DriverPreference)
+		} else {
+			prefs.DriverPreference = "flexible" // Default for simplified UI
+		}
+	}
+
+	// Handle demographics: Check if user_demographics was provided in request
+	// If provided as {} (empty object), reset to defaults
+	// If not provided at all, preserve existing
+	if !fieldsProvided["user_demographics"] {
+		// Field not provided - preserve existing
+		if existingPrefs != nil {
+			prefs.UserDemographics = existingPrefs.UserDemographics
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving existing demographics (field not provided)\",\"user_id\":\"%s\"}", userUUID.String())
+		}
+		// If no existing, leave as empty (will get defaults later if needed)
+	} else {
+		// Field was provided - check if it's empty object
+		isDemographicsEmpty := prefs.UserDemographics.AgeRange == "" &&
+			prefs.UserDemographics.Gender == "" &&
+			prefs.UserDemographics.Occupation == "" &&
+			prefs.UserDemographics.StudentStatus == "" &&
+			prefs.UserDemographics.Company == ""
+
+		if isDemographicsEmpty {
+			// User sent empty {} - reset to defaults (don't preserve)
+			prefs.UserDemographics = models.UserDemographics{
+				AgeRange:      "26-35",
+				Gender:        "prefer_not_to_say",
+				Occupation:    "",
+				StudentStatus: "not_student",
+				Company:       "",
+			}
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Resetting demographics to defaults (empty object provided)\",\"user_id\":\"%s\"}", userUUID.String())
+		}
+		// If not empty, use provided values (already set from JSON decode)
+	}
+
+	// Handle demographic preferences: Check if demographic_preferences was provided
+	if !fieldsProvided["demographic_preferences"] {
+		// Field not provided - preserve existing
+		if existingPrefs != nil {
+			prefs.DemographicPreferences = existingPrefs.DemographicPreferences
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving existing demographic preferences (field not provided)\",\"user_id\":\"%s\"}", userUUID.String())
+		}
+		// If no existing, leave as empty (will get defaults later if needed)
+	} else {
+		// Field was provided - check if it's empty object
+		isDemographicPrefsEmpty := len(prefs.DemographicPreferences.AgePreferences) == 0 &&
+			len(prefs.DemographicPreferences.GenderPreferences) == 0 &&
+			prefs.DemographicPreferences.StudentPreference == "" &&
+			len(prefs.DemographicPreferences.OccupationPreferences) == 0
+
+		if isDemographicPrefsEmpty {
+			// User sent empty {} - reset to defaults (don't preserve)
+			prefs.DemographicPreferences = models.DemographicPreferences{
+				AgePreferences:        []string{"18-25", "26-35", "36-45", "46-55"},
+				GenderPreferences:     []string{"any"},
+				StudentPreference:     "both",
+				OccupationPreferences: []string{},
+			}
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Resetting demographic preferences to defaults (empty object provided)\",\"user_id\":\"%s\"}", userUUID.String())
+		}
+		// If not empty, use provided values (already set from JSON decode)
+	}
+
+	// Handle notification preferences
+	if !fieldsProvided["notification_preferences"] {
+		// Field not provided - preserve existing or use default
+		if existingPrefs != nil {
+			prefs.NotificationPreferences = existingPrefs.NotificationPreferences
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving existing notification preferences\",\"user_id\":\"%s\"}", userUUID.String())
+		} else {
+			// Default notification preferences
+			prefs.NotificationPreferences = models.NotificationPrefs{
+				Email: true,
+				Push:  true,
+				SMS:   false,
+			}
+		}
+	}
+	// If provided, use provided values (already set from JSON decode)
 
 	// Normalize driver_preference for frontend compatibility
 	if prefs.DriverPreference == "flexible" {
 		prefs.DriverPreference = "either"
 	}
 
-	// Validate preferences
-	if prefs.MaxDetourMinutes < 5 || prefs.MaxDetourMinutes > 60 {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid max detour minutes\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.MaxDetourMinutes)
-		http.Error(w, "Max detour minutes must be between 5 and 60", http.StatusBadRequest)
-		return
-	}
-	if prefs.PreferredGroupSize < 2 || prefs.PreferredGroupSize > 5 {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid preferred group size\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.PreferredGroupSize)
-		http.Error(w, "Preferred group size must be between 2 and 5", http.StatusBadRequest)
-		return
-	}
-	if prefs.MinCompatibilityScore < 0.0 || prefs.MinCompatibilityScore > 1.0 {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid min compatibility score\",\"clerk_id\":\"%s\",\"value\":%.2f}", userID, prefs.MinCompatibilityScore)
-		http.Error(w, "Minimum compatibility score must be between 0.0 and 1.0", http.StatusBadRequest)
-		return
-	}
-
-	// Validate demographic fields
-	if err := validateUserDemographics(prefs.UserDemographics); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid user demographics\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if err := validateDemographicPreferences(prefs.DemographicPreferences); err != nil {
-		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid demographic preferences\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Validate destination and schedule fields
-	if prefs.DestinationLatitude != nil {
-		if *prefs.DestinationLatitude < -90 || *prefs.DestinationLatitude > 90 {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid destination_latitude\",\"user_id\":\"%s\",\"value\":%.6f}", userUUID.String(), *prefs.DestinationLatitude)
-			http.Error(w, "destination_latitude must be between -90 and 90", http.StatusBadRequest)
+	// Validate optional advanced fields (ONLY if user explicitly provided them)
+	// Don't validate preserved fields - they were already validated when originally set
+	if fieldsProvided["max_detour_minutes"] {
+		// User provided this field - validate it
+		if prefs.MaxDetourMinutes < 5 || prefs.MaxDetourMinutes > 60 {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid max detour minutes\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.MaxDetourMinutes)
+			http.Error(w, "Max detour minutes must be between 5 and 60", http.StatusBadRequest)
 			return
 		}
 	}
-	if prefs.DestinationLongitude != nil {
-		if *prefs.DestinationLongitude < -180 || *prefs.DestinationLongitude > 180 {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid destination_longitude\",\"user_id\":\"%s\",\"value\":%.6f}", userUUID.String(), *prefs.DestinationLongitude)
-			http.Error(w, "destination_longitude must be between -180 and 180", http.StatusBadRequest)
+	if fieldsProvided["preferred_group_size"] {
+		// User provided this field - validate it
+		if prefs.PreferredGroupSize < 2 || prefs.PreferredGroupSize > 5 {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid preferred group size\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.PreferredGroupSize)
+			http.Error(w, "Preferred group size must be between 2 and 5", http.StatusBadRequest)
+			return
+		}
+	}
+	if fieldsProvided["min_compatibility_score"] {
+		// User provided this field - validate it
+		if prefs.MinCompatibilityScore < 0.0 || prefs.MinCompatibilityScore > 1.0 {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid min compatibility score\",\"clerk_id\":\"%s\",\"value\":%.2f}", userID, prefs.MinCompatibilityScore)
+			http.Error(w, "Minimum compatibility score must be between 0.0 and 1.0", http.StatusBadRequest)
 			return
 		}
 	}
 
-	if len(prefs.CommuteDays) > 0 {
-		allowed := map[string]struct{}{"mon": {}, "tue": {}, "wed": {}, "thu": {}, "fri": {}, "sat": {}, "sun": {}}
-		for _, d := range prefs.CommuteDays {
-			if _, ok := allowed[d]; !ok {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid commute day\",\"user_id\":\"%s\",\"day\":\"%s\"}", userUUID.String(), d)
-				http.Error(w, "commute_days must be any of: mon,tue,wed,thu,fri,sat,sun", http.StatusBadRequest)
+	// Validate demographic fields (ONLY if user explicitly provided them)
+	// Don't validate preserved fields - they were already validated when originally set
+	if fieldsProvided["user_demographics"] {
+		// User provided demographics - validate them (even if empty, validation will handle it)
+		isDemographicsEmpty := prefs.UserDemographics.AgeRange == "" &&
+			prefs.UserDemographics.Gender == "" &&
+			prefs.UserDemographics.Occupation == "" &&
+			prefs.UserDemographics.StudentStatus == "" &&
+			prefs.UserDemographics.Company == ""
+
+		if !isDemographicsEmpty {
+			// Only validate if demographics are not empty (empty is allowed, will use defaults)
+			if err := validateUserDemographics(prefs.UserDemographics); err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid user demographics\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			// Empty demographics provided - ensure student_status has default
+			if prefs.UserDemographics.StudentStatus == "" {
+				prefs.UserDemographics.StudentStatus = "not_student"
+			}
+		}
+	}
+
+	// Validate demographic preferences (ONLY if user explicitly provided them)
+	if fieldsProvided["demographic_preferences"] {
+		// User provided demographic preferences - validate them (even if empty, validation will handle it)
+		isDemographicPrefsEmpty := len(prefs.DemographicPreferences.AgePreferences) == 0 &&
+			len(prefs.DemographicPreferences.GenderPreferences) == 0 &&
+			prefs.DemographicPreferences.StudentPreference == "" &&
+			len(prefs.DemographicPreferences.OccupationPreferences) == 0
+
+		if !isDemographicPrefsEmpty {
+			// Only validate if preferences are not empty (empty is allowed, will use defaults)
+			if err := validateDemographicPreferences(prefs.DemographicPreferences); err != nil {
+				log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid demographic preferences\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 		}
@@ -568,6 +797,13 @@ func (h *MatchingHandler) GetPotentialMatches(w http.ResponseWriter, r *http.Req
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Showing ALL matches (no compatibility score filtering)\",\"user_id\":\"%s\",\"matches_count\":%d}",
 		userUUID.String(), len(dbMatches))
 
+	// Get requesting user's home location for driving time calculation
+	requestingUser, err := h.userRepo.GetUserByID(userUUID)
+	if err != nil {
+		log.Printf("{\"severity\":\"WARN\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Could not get requesting user for driving time calculation\",\"user_id\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+		requestingUser = nil
+	}
+
 	// Convert database matches to frontend format
 	var pendingMatchesFormatted []map[string]interface{}
 	for _, match := range dbMatches {
@@ -618,9 +854,8 @@ func (h *MatchingHandler) GetPotentialMatches(w http.ResponseWriter, r *http.Req
 		// Get schedule compatibility details
 		var scheduleDetails map[string]interface{}
 		if match.User2 != nil {
-			currentUser, err := h.userRepo.GetUserByID(userUUID)
-			if err == nil {
-				details := h.enhancedMatchingService.GetScheduleCompatibilityDetails(currentUser, match.User2)
+			if requestingUser != nil {
+				details := h.enhancedMatchingService.GetScheduleCompatibilityDetails(requestingUser, match.User2)
 				scheduleScorePercent := details.CompatibilityScore * 100.0
 				scheduleDetails = map[string]interface{}{
 					"departure_time":           details.DepartureTime,
@@ -642,6 +877,53 @@ func (h *MatchingHandler) GetPotentialMatches(w http.ResponseWriter, r *http.Req
 			}
 		}
 
+		// Calculate driving time from requesting user's home to match user's home
+		var drivingTimeMinutes *int
+		var drivingDistanceMiles *float64
+
+		if requestingUser != nil && match.User2 != nil {
+			if requestingUser.HomeLatitude != 0 && requestingUser.HomeLongitude != 0 &&
+				match.User2.HomeLatitude != 0 && match.User2.HomeLongitude != 0 {
+
+				// Use RouteService if available (Google Maps API)
+				if h.routeService != nil {
+					route, err := h.routeService.GetRoute(
+						services.Location{
+							Latitude:  requestingUser.HomeLatitude,
+							Longitude: requestingUser.HomeLongitude,
+						},
+						services.Location{
+							Latitude:  match.User2.HomeLatitude,
+							Longitude: match.User2.HomeLongitude,
+						},
+					)
+					if err == nil {
+						minutes := int(route.TotalDuration / 60) // Convert seconds to minutes
+						drivingTimeMinutes = &minutes
+						drivingDistanceMiles = &route.TotalDistance
+						log.Printf("{\"severity\":\"DEBUG\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Calculated driving time via Google Maps\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"minutes\":%d,\"miles\":%.2f}",
+							userUUID.String(), match.ID, minutes, route.TotalDistance)
+					} else {
+						log.Printf("{\"severity\":\"DEBUG\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Google Maps route calculation failed, using fallback\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"error\":\"%v\"}",
+							userUUID.String(), match.ID, err)
+					}
+				}
+
+				// Fallback: Haversine distance + estimated time
+				if drivingTimeMinutes == nil {
+					distance := calculateDistance(
+						requestingUser.HomeLatitude, requestingUser.HomeLongitude,
+						match.User2.HomeLatitude, match.User2.HomeLongitude,
+					)
+					estimatedMinutes := int(distance * 2.5) // Assume ~2.5 min/mile average
+					drivingTimeMinutes = &estimatedMinutes
+					drivingDistanceMiles = &distance
+					log.Printf("{\"severity\":\"DEBUG\",\"message\":\"🔍 MATCHING: GetPotentialMatches: Calculated driving time via Haversine fallback\",\"user_id\":\"%s\",\"match_id\":\"%s\",\"minutes\":%d,\"miles\":%.2f}",
+						userUUID.String(), match.ID, estimatedMinutes, distance)
+				}
+			}
+		}
+
 		matchData := map[string]interface{}{
 			"id":                          match.ID,
 			"user2":                       match.User2,
@@ -656,6 +938,8 @@ func (h *MatchingHandler) GetPotentialMatches(w http.ResponseWriter, r *http.Req
 			"status":                      match.Status,
 			"expires_at":                  match.ExpiresAt,
 			"created_at":                  match.CreatedAt,
+			"driving_time_minutes":        drivingTimeMinutes,   // NEW: Driving time in minutes
+			"driving_distance_miles":      drivingDistanceMiles, // NEW: Driving distance in miles
 		}
 
 		pendingMatchesFormatted = append(pendingMatchesFormatted, matchData)
@@ -1521,31 +1805,48 @@ func calculateDistance(lat1, lng1, lat2, lng2 float64) float64 {
 // Validation functions for demographic fields
 
 // validateUserDemographics validates user demographic information
+// For simplified preferences: age_range and gender are OPTIONAL (only validate if provided)
 func validateUserDemographics(demographics models.UserDemographics) error {
-	// Validate age range
-	validAgeRanges := []string{"18-25", "26-35", "36-45", "46-55", "56-65", "65+"}
-	ageValid := false
-	for _, age := range validAgeRanges {
-		if demographics.AgeRange == age {
-			ageValid = true
-			break
-		}
-	}
-	if !ageValid {
-		return fmt.Errorf("age_range must be one of: %v", validAgeRanges)
+	// Check if demographics are completely empty - allow empty demographics
+	isEmpty := demographics.AgeRange == "" &&
+		demographics.Gender == "" &&
+		demographics.Occupation == "" &&
+		demographics.StudentStatus == "" &&
+		demographics.Company == ""
+
+	if isEmpty {
+		// Allow empty demographics - return no error
+		return nil
 	}
 
-	// Validate gender
-	validGenders := []string{"male", "female", "non-binary", "prefer_not_to_say"}
-	genderValid := false
-	for _, gender := range validGenders {
-		if demographics.Gender == gender {
-			genderValid = true
-			break
+	// Validate age range (only if provided)
+	if demographics.AgeRange != "" {
+		validAgeRanges := []string{"18-25", "26-35", "36-45", "46-55", "56-65", "65+"}
+		ageValid := false
+		for _, age := range validAgeRanges {
+			if demographics.AgeRange == age {
+				ageValid = true
+				break
+			}
+		}
+		if !ageValid {
+			return fmt.Errorf("age_range must be one of: %v", validAgeRanges)
 		}
 	}
-	if !genderValid {
-		return fmt.Errorf("gender must be one of: %v", validGenders)
+
+	// Validate gender (only if provided)
+	if demographics.Gender != "" {
+		validGenders := []string{"male", "female", "non-binary", "prefer_not_to_say"}
+		genderValid := false
+		for _, gender := range validGenders {
+			if demographics.Gender == gender {
+				genderValid = true
+				break
+			}
+		}
+		if !genderValid {
+			return fmt.Errorf("gender must be one of: %v", validGenders)
+		}
 	}
 
 	// Validate occupation (optional for auto-save)
@@ -1573,21 +1874,18 @@ func validateUserDemographics(demographics models.UserDemographics) error {
 }
 
 // validateDemographicPreferences validates demographic preferences
+// For simplified preferences: Skip validation entirely if all fields are empty
 func validateDemographicPreferences(preferences models.DemographicPreferences) error {
-	// For auto-save functionality, allow empty preferences and provide defaults
-	if len(preferences.AgePreferences) == 0 {
-		// Set default age preferences if none provided
-		preferences.AgePreferences = []string{"18-25", "26-35", "36-45", "46-55"}
-	}
+	// Check if all demographic preferences are empty - allow empty preferences
+	isEmpty := len(preferences.AgePreferences) == 0 &&
+		len(preferences.GenderPreferences) == 0 &&
+		preferences.StudentPreference == "" &&
+		len(preferences.OccupationPreferences) == 0
 
-	if len(preferences.GenderPreferences) == 0 {
-		// Set default gender preferences if none provided
-		preferences.GenderPreferences = []string{"any"}
-	}
-
-	if preferences.StudentPreference == "" {
-		// Set default student preference if none provided
-		preferences.StudentPreference = "both"
+	if isEmpty {
+		// Allow empty demographic preferences - return no error
+		// Backend will use defaults when needed
+		return nil
 	}
 
 	validAgeRanges := []string{"18-25", "26-35", "36-45", "46-55", "56-65", "65+"}
@@ -2021,7 +2319,7 @@ func (h *MatchingHandler) generateRidesFromSchedule(ctx context.Context, schedul
 	}
 
 	log.Printf("{\"severity\":\"INFO\",\"message\":\"Successfully generated and saved %d/%d rides from schedule\",\"schedule_id\":\"%s\",\"success_count\":%d,\"total_count\":%d}",
-		schedule.ID, successCount, len(rides), successCount, len(rides))
+		successCount, len(rides), schedule.ID, successCount, len(rides))
 
 	return nil
 }
