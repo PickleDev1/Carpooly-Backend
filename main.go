@@ -199,6 +199,7 @@ func setupRouter(db *sql.DB, userHandler *handlers.UserHandler, carpoolHandler *
 	protected.HandleFunc("/carpools/search", carpoolHandler.SearchCarPools).Methods("POST")
 
 	protected.HandleFunc("/rides/active", carpoolRideHandler.GetActiveRides).Methods("GET")
+	protected.HandleFunc("/rides/next", carpoolRideHandler.GetUserNextRide).Methods("GET")
 	protected.HandleFunc("/rides/completed", carpoolRideHandler.GetUserCompletedRides).Methods("GET")
 	protected.HandleFunc("/carpools/{id}/rides", carpoolRideHandler.CreateCarpoolRide).Methods("POST")
 	protected.HandleFunc("/carpools/rides/{rideID}/updateStatus", carpoolRideHandler.UpdateCarpoolRideStatus).Methods("PUT")

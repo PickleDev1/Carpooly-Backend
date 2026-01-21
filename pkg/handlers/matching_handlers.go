@@ -323,8 +323,8 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 			prefs.ScheduleFlexibilityMinutes = existingPrefs.ScheduleFlexibilityMinutes // Preserve existing
 			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving schedule_flexibility_minutes\",\"user_id\":\"%s\",\"value\":%d}", userUUID.String(), prefs.ScheduleFlexibilityMinutes)
 		} else {
-			prefs.ScheduleFlexibilityMinutes = 30 // Default for simplified UI
-		}
+		prefs.ScheduleFlexibilityMinutes = 30 // Default for simplified UI
+	}
 	}
 	if !fieldsProvided["max_pickup_distance_miles"] {
 		// Field not provided - preserve existing or use default
@@ -341,7 +341,7 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 			prefs.MinCompatibilityScore = existingPrefs.MinCompatibilityScore // Preserve existing
 			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"UpdateUserMatchingPreferences: Preserving min_compatibility_score\",\"user_id\":\"%s\",\"value\":%.2f}", userUUID.String(), prefs.MinCompatibilityScore)
 		} else {
-			prefs.MinCompatibilityScore = 0.7 // Default for simplified UI
+		prefs.MinCompatibilityScore = 0.7 // Default for simplified UI
 		}
 	}
 	if !fieldsProvided["driver_preference"] {
@@ -440,26 +440,26 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 	// Don't validate preserved fields - they were already validated when originally set
 	if fieldsProvided["max_detour_minutes"] {
 		// User provided this field - validate it
-		if prefs.MaxDetourMinutes < 5 || prefs.MaxDetourMinutes > 60 {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid max detour minutes\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.MaxDetourMinutes)
-			http.Error(w, "Max detour minutes must be between 5 and 60", http.StatusBadRequest)
-			return
-		}
+	if prefs.MaxDetourMinutes < 5 || prefs.MaxDetourMinutes > 60 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid max detour minutes\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.MaxDetourMinutes)
+		http.Error(w, "Max detour minutes must be between 5 and 60", http.StatusBadRequest)
+		return
+	}
 	}
 	if fieldsProvided["preferred_group_size"] {
 		// User provided this field - validate it
-		if prefs.PreferredGroupSize < 2 || prefs.PreferredGroupSize > 5 {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid preferred group size\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.PreferredGroupSize)
-			http.Error(w, "Preferred group size must be between 2 and 5", http.StatusBadRequest)
-			return
-		}
+	if prefs.PreferredGroupSize < 2 || prefs.PreferredGroupSize > 5 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid preferred group size\",\"clerk_id\":\"%s\",\"value\":%d}", userID, prefs.PreferredGroupSize)
+		http.Error(w, "Preferred group size must be between 2 and 5", http.StatusBadRequest)
+		return
+	}
 	}
 	if fieldsProvided["min_compatibility_score"] {
 		// User provided this field - validate it
-		if prefs.MinCompatibilityScore < 0.0 || prefs.MinCompatibilityScore > 1.0 {
-			log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid min compatibility score\",\"clerk_id\":\"%s\",\"value\":%.2f}", userID, prefs.MinCompatibilityScore)
-			http.Error(w, "Minimum compatibility score must be between 0.0 and 1.0", http.StatusBadRequest)
-			return
+	if prefs.MinCompatibilityScore < 0.0 || prefs.MinCompatibilityScore > 1.0 {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid min compatibility score\",\"clerk_id\":\"%s\",\"value\":%.2f}", userID, prefs.MinCompatibilityScore)
+		http.Error(w, "Minimum compatibility score must be between 0.0 and 1.0", http.StatusBadRequest)
+		return
 		}
 	}
 
@@ -475,10 +475,10 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 
 		if !isDemographicsEmpty {
 			// Only validate if demographics are not empty (empty is allowed, will use defaults)
-			if err := validateUserDemographics(prefs.UserDemographics); err != nil {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid user demographics\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
+	if err := validateUserDemographics(prefs.UserDemographics); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid user demographics\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 			}
 		} else {
 			// Empty demographics provided - ensure student_status has default
@@ -498,9 +498,9 @@ func (h *MatchingHandler) UpdateUserMatchingPreferences(w http.ResponseWriter, r
 
 		if !isDemographicPrefsEmpty {
 			// Only validate if preferences are not empty (empty is allowed, will use defaults)
-			if err := validateDemographicPreferences(prefs.DemographicPreferences); err != nil {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid demographic preferences\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
-				http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := validateDemographicPreferences(prefs.DemographicPreferences); err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"UpdateUserMatchingPreferences: Invalid demographic preferences\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 		}
@@ -1132,20 +1132,20 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 		log.Printf("{\"severity\":\"WARNING\",\"message\":\"FindMatches: FindCandidatesByPreferences failed (may be missing destination), falling back to basic matching\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
 		// Fallback to basic matching if preference-based query fails (e.g., no destination set)
 		// Use demographic compatibility if user has preferences, otherwise use basic matching
-		if userPrefs != nil && len(userPrefs.DemographicPreferences.AgePreferences) > 0 {
+	if userPrefs != nil && len(userPrefs.DemographicPreferences.AgePreferences) > 0 {
 			log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using demographic compatibility matching as fallback\",\"user_uuid\":\"%s\"}", userUUID.String())
-			users, err = h.matchingRepo.GetDemographicallyCompatibleUsers(r.Context(), userUUID.String())
-			if err != nil {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetDemographicallyCompatibleUsers\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+		users, err = h.matchingRepo.GetDemographicallyCompatibleUsers(r.Context(), userUUID.String())
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetDemographicallyCompatibleUsers\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
 				// Final fallback to basic matching
-				log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Falling back to basic matching\",\"user_uuid\":\"%s\"}", userUUID.String())
-				users, err = h.matchingRepo.GetActiveUsersForMatching(r.Context(), userUUID.String())
-			}
-		} else {
-			log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using basic matching as fallback (no demographic preferences)\",\"user_uuid\":\"%s\"}", userUUID.String())
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Falling back to basic matching\",\"user_uuid\":\"%s\"}", userUUID.String())
 			users, err = h.matchingRepo.GetActiveUsersForMatching(r.Context(), userUUID.String())
-			if err != nil {
-				log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetActiveUsersForMatching\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
+		}
+	} else {
+			log.Printf("{\"severity\":\"INFO\",\"message\":\"FindMatches: Using basic matching as fallback (no demographic preferences)\",\"user_uuid\":\"%s\"}", userUUID.String())
+		users, err = h.matchingRepo.GetActiveUsersForMatching(r.Context(), userUUID.String())
+		if err != nil {
+			log.Printf("{\"severity\":\"ERROR\",\"message\":\"FindMatches: Error in GetActiveUsersForMatching\",\"user_uuid\":\"%s\",\"error\":\"%v\"}", userUUID.String(), err)
 			}
 		}
 	}
@@ -1222,7 +1222,7 @@ func (h *MatchingHandler) FindMatches(w http.ResponseWriter, r *http.Request) {
 		match.User2ID = user.ID.String()
 		// Enhanced service sets status, but ensure it's "active" for potential matches
 		if match.Status == "" {
-			match.Status = "active"
+		match.Status = "active"
 		} else if match.Status == "pending" {
 			match.Status = "active" // Convert pending to active for potential matches
 		}
@@ -1821,31 +1821,31 @@ func validateUserDemographics(demographics models.UserDemographics) error {
 
 	// Validate age range (only if provided)
 	if demographics.AgeRange != "" {
-		validAgeRanges := []string{"18-25", "26-35", "36-45", "46-55", "56-65", "65+"}
-		ageValid := false
-		for _, age := range validAgeRanges {
-			if demographics.AgeRange == age {
-				ageValid = true
-				break
-			}
+	validAgeRanges := []string{"18-25", "26-35", "36-45", "46-55", "56-65", "65+"}
+	ageValid := false
+	for _, age := range validAgeRanges {
+		if demographics.AgeRange == age {
+			ageValid = true
+			break
 		}
-		if !ageValid {
-			return fmt.Errorf("age_range must be one of: %v", validAgeRanges)
+	}
+	if !ageValid {
+		return fmt.Errorf("age_range must be one of: %v", validAgeRanges)
 		}
 	}
 
 	// Validate gender (only if provided)
 	if demographics.Gender != "" {
-		validGenders := []string{"male", "female", "non-binary", "prefer_not_to_say"}
-		genderValid := false
-		for _, gender := range validGenders {
-			if demographics.Gender == gender {
-				genderValid = true
-				break
-			}
+	validGenders := []string{"male", "female", "non-binary", "prefer_not_to_say"}
+	genderValid := false
+	for _, gender := range validGenders {
+		if demographics.Gender == gender {
+			genderValid = true
+			break
 		}
-		if !genderValid {
-			return fmt.Errorf("gender must be one of: %v", validGenders)
+	}
+	if !genderValid {
+		return fmt.Errorf("gender must be one of: %v", validGenders)
 		}
 	}
 
@@ -2357,24 +2357,26 @@ func (h *MatchingHandler) mergeUserPreferences(user1, user2 *models.UserMatching
 
 // calculateOptimalLeaveTime determines the best leave time based on both users' arrival times
 func (h *MatchingHandler) calculateOptimalLeaveTime(user1Time, user2Time *string) time.Time {
-	// Default time if both are nil
-	defaultTime := time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC)
+	// Get default location for timezone-aware parsing
+	loc := h.getDefaultLocation()
+	// Default time if both are nil (8:00 AM in local timezone)
+	defaultTime := time.Date(2024, 1, 1, 8, 0, 0, 0, loc)
 
 	// If one user has no time preference, use the other's
 	if user1Time == nil || *user1Time == "" {
 		if user2Time == nil || *user2Time == "" {
 			return defaultTime
 		}
-		return h.parseArrivalTime(*user2Time)
+		return h.parseArrivalTime(*user2Time, loc)
 	}
 
 	if user2Time == nil || *user2Time == "" {
-		return h.parseArrivalTime(*user1Time)
+		return h.parseArrivalTime(*user1Time, loc)
 	}
 
 	// Both users have time preferences - use the EARLIER time (more conservative)
-	time1 := h.parseArrivalTime(*user1Time)
-	time2 := h.parseArrivalTime(*user2Time)
+	time1 := h.parseArrivalTime(*user1Time, loc)
+	time2 := h.parseArrivalTime(*user2Time, loc)
 
 	if time1.Before(time2) {
 		log.Printf("{\"severity\":\"INFO\",\"message\":\"Using earlier time for leave time\",\"time1\":\"%s\",\"time2\":\"%s\",\"chosen\":\"%s\"}",
@@ -2387,21 +2389,41 @@ func (h *MatchingHandler) calculateOptimalLeaveTime(user1Time, user2Time *string
 	return time2
 }
 
-// parseArrivalTime parses arrival time and returns leave time (30 minutes before)
-func (h *MatchingHandler) parseArrivalTime(arrivalTime string) time.Time {
+// parseArrivalTime parses arrival time in the given location and returns leave time (30 minutes before)
+// CRITICAL: Arrival times are stored as local time strings (e.g., "08:00" means 8 AM local time, not UTC)
+func (h *MatchingHandler) parseArrivalTime(arrivalTime string, loc *time.Location) time.Time {
+	// Parse the time string to extract hour and minute
+	// We'll interpret this as local time, not UTC
+	var hour, minute int
+	var err error
+	
 	// Try HH:MM format first (most common)
-	parsedTime, err := time.Parse("15:04", arrivalTime)
+	_, err = fmt.Sscanf(arrivalTime, "%d:%d", &hour, &minute)
 	if err != nil {
 		// Try HH:MM:SS format as fallback
-		parsedTime, err = time.Parse("15:04:05", arrivalTime)
+		var second int
+		_, err = fmt.Sscanf(arrivalTime, "%d:%d:%d", &hour, &minute, &second)
 		if err != nil {
 			log.Printf("{\"severity\":\"WARNING\",\"message\":\"Failed to parse arrival time, using default\",\"arrival_time\":\"%s\",\"error\":\"%v\"}", arrivalTime, err)
-			return time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC) // Use reasonable default year
+			return time.Date(2024, 1, 1, 8, 0, 0, 0, loc) // Use reasonable default year in local timezone
 		}
 	}
 
+	// Validate hour and minute
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		log.Printf("{\"severity\":\"WARNING\",\"message\":\"Invalid hour/minute in arrival time, using default\",\"arrival_time\":\"%s\",\"hour\":%d,\"minute\":%d}", arrivalTime, hour, minute)
+		return time.Date(2024, 1, 1, 8, 0, 0, 0, loc)
+	}
+
+	// Create time in the specified location (local timezone)
+	parsedTime := time.Date(2024, 1, 1, hour, minute, 0, 0, loc)
+
 	// Set leave time to 30 minutes before arrival time
 	leaveTime := parsedTime.Add(-30 * time.Minute)
+	
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"Parsed arrival time\",\"arrival_time\":\"%s\",\"parsed_hour\":%d,\"parsed_minute\":%d,\"leave_time\":\"%s\",\"timezone\":\"%s\"}",
+		arrivalTime, hour, minute, leaveTime.Format("15:04"), loc.String())
+	
 	return leaveTime
 }
 

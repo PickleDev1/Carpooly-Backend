@@ -623,6 +623,47 @@ func (h *CarPoolRideHandler) GetActiveRides(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(rides)
 }
 
+// GetUserNextRide returns the next upcoming ride for the authenticated user
+// GET /api/rides/next
+func (h *CarPoolRideHandler) GetUserNextRide(w http.ResponseWriter, r *http.Request) {
+	log.Printf("{\"severity\":\"INFO\",\"message\":\"GetUserNextRide called\",\"method\":\"%s\",\"url\":\"%s\"}", r.Method, r.URL.String())
+
+	// Get Clerk ID from the authenticated session
+	clerkID, ok := middleware.GetClerkIDFromContext(r.Context())
+	if !ok {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get Clerk ID from context\"}")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Convert clerk_id to user_id
+	userID, err := h.userRepo.GetUserIDByClerkID(r.Context(), clerkID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get user ID\",\"clerk_id\":\"%s\",\"error\":\"%v\"}", clerkID, err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Get next ride
+	nextRide, err := h.carpoolRideRepo.GetUserNextRide(r.Context(), userID)
+	if err != nil {
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"Failed to get next ride\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		http.Error(w, "Failed to get next ride", http.StatusInternalServerError)
+		return
+	}
+
+	// If no next ride found, return null
+	if nextRide == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(nil)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(nextRide)
+}
+
 // GetRideByCarpoolAndDateParticipants returns the full ride object for a carpool and date
 func (h *CarPoolRideHandler) GetRideByCarpoolAndDateParticipants(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[INFO] GetRideByCarpoolAndDateParticipants called. Method: %s, URL: %s, RemoteAddr: %s, UserAgent: %s", r.Method, r.URL.String(), r.RemoteAddr, r.UserAgent())

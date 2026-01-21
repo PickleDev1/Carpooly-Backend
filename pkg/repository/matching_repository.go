@@ -803,6 +803,39 @@ func (r *MatchingRepository) GetDemographicallyCompatibleUsers(ctx context.Conte
 	return users, nil
 }
 
+// isDefaultDemographics checks if demographics match the system defaults (meaning user didn't set them)
+func isDefaultDemographics(demographics models.UserDemographics) bool {
+	return demographics.AgeRange == "26-35" &&
+		demographics.Gender == "prefer_not_to_say" &&
+		demographics.StudentStatus == "not_student" &&
+		demographics.Occupation == "" &&
+		demographics.Company == ""
+}
+
+// isDefaultDemographicPreferences checks if preferences match the system defaults (meaning user didn't set them)
+func isDefaultDemographicPreferences(preferences models.DemographicPreferences) bool {
+	// Default preferences: ["18-25", "26-35", "36-45", "46-55"], ["any"], "both"
+	if len(preferences.AgePreferences) != 4 {
+		return false
+	}
+	expectedAges := map[string]bool{"18-25": true, "26-35": true, "36-45": true, "46-55": true}
+	for _, age := range preferences.AgePreferences {
+		if !expectedAges[age] {
+			return false
+		}
+	}
+
+	if len(preferences.GenderPreferences) != 1 || preferences.GenderPreferences[0] != "any" {
+		return false
+	}
+
+	if preferences.StudentPreference != "both" {
+		return false
+	}
+
+	return true
+}
+
 // isDemographicallyCompatible checks if two users are demographically compatible
 func isDemographicallyCompatible(userDemographics models.UserDemographics, preferences models.DemographicPreferences) bool {
 	// Check age compatibility
@@ -1620,24 +1653,56 @@ func (r *MatchingRepository) FindCandidatesByPreferences(ctx context.Context, us
 				userID, user.ID.String(), user.Name)
 		}
 
-		// Detailed demographic compatibility check
-		// If demographics aren't set, allow the match (for testing and flexibility)
-		demographicsSet := userDemographics.AgeRange != "" || userDemographics.Gender != "" || userDemographics.StudentStatus != ""
-		preferencesSet := len(demographicPreferences.AgePreferences) > 0 || len(demographicPreferences.GenderPreferences) > 0 || demographicPreferences.StudentPreference != ""
+		// Detailed demographic compatibility check (BIDIRECTIONAL)
+		// Check both directions:
+		// 1. Does candidate's demographics match requesting user's preferences?
+		// 2. Does requesting user's demographics match candidate's preferences?
+		// CRITICAL: Only check compatibility if demographics/preferences are NOT defaults
+		// (Defaults mean user didn't set them, so don't filter based on defaults)
 
-		if !demographicsSet || !preferencesSet {
-			// If demographics aren't fully set, allow the match
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Allowing match without full demographics\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"demographics_set\":%v,\"preferences_set\":%v}",
-				userID, user.ID.String(), demographicsSet, preferencesSet)
+		// Check if candidate has NON-DEFAULT demographics (user actually set them)
+		candidateDemographicsSet := !isDefaultDemographics(userDemographics)
+		// Check if requesting user has NON-DEFAULT preferences (user actually set them)
+		requestingUserPreferencesSet := !isDefaultDemographicPreferences(userPrefs.DemographicPreferences)
+		// Check if requesting user has NON-DEFAULT demographics (user actually set them)
+		requestingUserDemographicsSet := !isDefaultDemographics(userPrefs.UserDemographics)
+		// Check if candidate has NON-DEFAULT preferences (user actually set them)
+		candidatePreferencesSet := !isDefaultDemographicPreferences(demographicPreferences)
+
+		// Check bidirectional compatibility
+		// Direction 1: Candidate's demographics vs requesting user's preferences
+		// Only check if BOTH are NON-DEFAULT (user actually set them), otherwise allow (default to true)
+		direction1Compatible := true
+		if candidateDemographicsSet && requestingUserPreferencesSet {
+			direction1Compatible = isDemographicallyCompatible(userDemographics, userPrefs.DemographicPreferences)
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Direction 1 check (candidate demographics vs requesting user preferences)\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"compatible\":%v,\"candidate_demographics_set\":%v,\"requesting_user_preferences_set\":%v}",
+				userID, user.ID.String(), direction1Compatible, candidateDemographicsSet, requestingUserPreferencesSet)
+		} else {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Direction 1 skipped (using defaults, not user-set)\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"candidate_demographics_set\":%v,\"requesting_user_preferences_set\":%v}",
+				userID, user.ID.String(), candidateDemographicsSet, requestingUserPreferencesSet)
+		}
+
+		// Direction 2: Requesting user's demographics vs candidate's preferences
+		// Only check if BOTH are NON-DEFAULT (user actually set them), otherwise allow (default to true)
+		direction2Compatible := true
+		if requestingUserDemographicsSet && candidatePreferencesSet {
+			direction2Compatible = isDemographicallyCompatible(userPrefs.UserDemographics, demographicPreferences)
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Direction 2 check (requesting user demographics vs candidate preferences)\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"compatible\":%v,\"requesting_user_demographics_set\":%v,\"candidate_preferences_set\":%v}",
+				userID, user.ID.String(), direction2Compatible, requestingUserDemographicsSet, candidatePreferencesSet)
+		} else {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Direction 2 skipped (using defaults, not user-set)\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"requesting_user_demographics_set\":%v,\"candidate_preferences_set\":%v}",
+				userID, user.ID.String(), requestingUserDemographicsSet, candidatePreferencesSet)
+		}
+
+		// Both directions must be compatible (or not applicable)
+		if direction1Compatible && direction2Compatible {
 			candidates = append(candidates, &user)
-		} else if isDemographicallyCompatible(userDemographics, demographicPreferences) {
-			candidates = append(candidates, &user)
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Candidate passed all filters\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"candidate_name\":\"%s\"}",
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Candidate passed all filters including demographics\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"candidate_name\":\"%s\"}",
 				userID, user.ID.String(), user.Name)
 		} else {
 			filteredByDemographics++
-			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Candidate filtered by demographics\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"candidate_name\":\"%s\"}",
-				userID, user.ID.String(), user.Name)
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"FindCandidatesByPreferences: Candidate filtered by demographics\",\"user_id\":\"%s\",\"candidate_id\":\"%s\",\"candidate_name\":\"%s\",\"direction1_compatible\":%v,\"direction2_compatible\":%v}",
+				userID, user.ID.String(), user.Name, direction1Compatible, direction2Compatible)
 		}
 	}
 

@@ -899,3 +899,140 @@ func (r *CarPoolRideRepository) GetAllRidesForCarpool(ctx context.Context, carpo
 
 	return rides, nil
 }
+
+// NextRideInfo represents the next ride with carpool and driver information for dashboard
+type NextRideInfo struct {
+	Ride         *models.CarpoolRide `json:"ride"`
+	CarpoolName  string              `json:"carpool_name"`
+	Driver       *models.User        `json:"driver,omitempty"` // nil if no driver assigned
+	IsUserDriver bool                `json:"is_user_driver"`  // true if the requesting user is the driver
+}
+
+// GetUserNextRide returns the next upcoming ride for a user with carpool and driver information
+// Returns nil if no upcoming rides are found
+func (r *CarPoolRideRepository) GetUserNextRide(ctx context.Context, userID uuid.UUID) (*NextRideInfo, error) {
+	query := `
+		SELECT 
+			cr.id, cr.carpool_id, cr.driver_id, cr.start_time, cr.status,
+			cr.location_lat, cr.location_lng, cr.miles_saved, cr.participants,
+			cr.created_at, cr.updated_at,
+			c.carpool_name,
+			-- Driver information (if driver_id is set)
+			driver.id as driver_user_id, driver.name as driver_name, 
+			driver.display_name as driver_display_name, driver.email as driver_email,
+			driver.clerk_id as driver_clerk_id
+		FROM carpool_rides cr
+		JOIN carpools c ON cr.carpool_id = c.id
+		JOIN carpool_members cm ON c.id = cm.carpool_id
+		LEFT JOIN users driver ON cr.driver_id = driver.id
+		WHERE cm.user_id = $1
+		  AND cr.start_time > NOW()  -- Only future rides
+		  AND cr.status IN (0, 1)     -- Pending or Active status
+		ORDER BY cr.start_time ASC
+		LIMIT 1
+	`
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetUserNextRide: Executing query\",\"user_id\":\"%s\"}", userID)
+
+	var ride models.CarpoolRide
+	var participantsJSON []byte
+	var locationLat, locationLng, milesSaved sql.NullFloat64
+	var driverID sql.NullString
+	var carpoolName string
+	
+	// Driver fields (nullable)
+	var driverUserID sql.NullString
+	var driverName sql.NullString
+	var driverDisplayName sql.NullString
+	var driverEmail sql.NullString
+	var driverClerkID sql.NullString
+
+	err := r.db.QueryRowContext(ctx, query, userID).Scan(
+		&ride.ID,
+		&ride.CarpoolID,
+		&driverID,
+		&ride.StartTime,
+		&ride.Status,
+		&locationLat,
+		&locationLng,
+		&milesSaved,
+		&participantsJSON,
+		&ride.CreatedAt,
+		&ride.UpdatedAt,
+		&carpoolName,
+		&driverUserID,
+		&driverName,
+		&driverDisplayName,
+		&driverEmail,
+		&driverClerkID,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetUserNextRide: No upcoming rides found\",\"user_id\":\"%s\"}", userID)
+			return nil, nil // No upcoming rides - not an error
+		}
+		log.Printf("{\"severity\":\"ERROR\",\"message\":\"GetUserNextRide: Query failed\",\"user_id\":\"%s\",\"error\":\"%v\"}", userID, err)
+		return nil, fmt.Errorf("failed to query next ride: %w", err)
+	}
+
+	// Handle NULL values for ride
+	if locationLat.Valid {
+		ride.LocationLat = &locationLat.Float64
+	}
+	if locationLng.Valid {
+		ride.LocationLng = &locationLng.Float64
+	}
+	if milesSaved.Valid {
+		ride.MilesSaved = &milesSaved.Float64
+	}
+	if driverID.Valid {
+		driverUUID, err := uuid.Parse(driverID.String)
+		if err == nil {
+			ride.DriverID = &driverUUID
+		}
+	}
+
+	// Parse participants JSON
+	if len(participantsJSON) > 0 {
+		if err := json.Unmarshal(participantsJSON, &ride.Participants); err != nil {
+			log.Printf("{\"severity\":\"WARNING\",\"message\":\"GetUserNextRide: Failed to unmarshal participants\",\"error\":\"%v\"}", err)
+			ride.Participants = []models.User{}
+		}
+	}
+
+	// Build driver info if driver is assigned
+	var driver *models.User
+	isUserDriver := false
+	if driverUserID.Valid {
+		driverUUID, err := uuid.Parse(driverUserID.String)
+		if err == nil {
+			driver = &models.User{
+				ID:                     driverUUID,
+				Name:                   driverName.String,
+				DisplayName:            sql.NullString{String: driverDisplayName.String, Valid: driverDisplayName.Valid},
+				Email:                  driverEmail.String,
+				ClerkID:                driverClerkID.String,
+				City:                   sql.NullString{Valid: false}, // Not needed for dashboard display
+				State:                  sql.NullString{Valid: false}, // Not needed for dashboard display
+				LocationSharingEnabled: false,                      // Not needed for dashboard display
+				HomeLatitude:           0.0,                         // Not needed for dashboard display
+				HomeLongitude:          0.0,                         // Not needed for dashboard display
+				CreatedAt:              time.Time{},                 // Zero value - not needed for display
+				UpdatedAt:              time.Time{},                 // Zero value - not needed for display
+			}
+			// Check if the requesting user is the driver
+			isUserDriver = driverUUID == userID
+		}
+	}
+
+	log.Printf("{\"severity\":\"DEBUG\",\"message\":\"GetUserNextRide: Found next ride\",\"user_id\":\"%s\",\"ride_id\":\"%s\",\"carpool_name\":\"%s\",\"has_driver\":%v,\"is_user_driver\":%v}",
+		userID, ride.ID, carpoolName, driver != nil, isUserDriver)
+
+	return &NextRideInfo{
+		Ride:         &ride,
+		CarpoolName:  carpoolName,
+		Driver:       driver,
+		IsUserDriver: isUserDriver,
+	}, nil
+}
